@@ -160,7 +160,7 @@ async def dashboard_overview(
     review = (
         await session.execute(
             select(SystemConfig.config_json).where(
-                SystemConfig.scope_type == "dashboard", SystemConfig.scope_id == "latency"
+                SystemConfig.scope_type == "global", SystemConfig.scope_id == "dashboard_latency"
             )
         )
     ).scalar_one_or_none()

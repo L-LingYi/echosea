@@ -36,7 +36,7 @@ async def test_dashboard_excludes_reviewed_latency_without_changing_usage(db_ses
     assert before["tokens"]["p95_ttft_ms"] == 40000
     assert before["tokens"]["slow_response_alerts"] == 1
 
-    db_session.add(SystemConfig(scope_type="dashboard", scope_id="latency", config_json={
+    db_session.add(SystemConfig(scope_type="global", scope_id="dashboard_latency", config_json={
         "excluded_usage_ids": [slow.id],
         "excluded_alert_ids": [alert.id],
     }))
