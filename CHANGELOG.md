@@ -1,3 +1,11 @@
+# 更新日志（Changelog）
+
+## v1.4.4 (2026-11-25)
+- **公开仓库与通用人设准备**：将 `persona.json` 替换为通用人设 `echosea_v1`（默认角色名 `回声`），统一 WebUI 侧边栏标题与意识海核心节点标识为 `EchoSea`。
+- **默认公开更新源与界面精简**：将 `UPDATE_GITHUB_REPO` 默认值设为 `L-LingYi/echosea`，精简「系统在线更新」卡片标题与模式状态显示，移除「本地仓库模式」等内部阶段文案。
+- **仪表盘消耗柱状图优化**：修复按小时统计底部标签高度塌陷导致的柱底错位问题；将按天统计窗口扩展为近 30 天并优化刻度与数值抽样显示。
+- **文档完善**：重构 `README.md` 与 `docs/OPS_UPDATE_GUIDE.md`，脱敏现网部署路径并补充环境变量、默认账密与安全配置说明。
+
 ## v1.4.3 (2026-11-25)
 - **深色模式全面修复**：补齐 `color-scheme: dark`、`.btn.secondary`、`.provider-card`、`.modal-box`、`.seg-bar`、`.progress-track`、`.mobile-bottom-nav`、`tbody tr:hover`、`.toast` 与冷却提示框等深色样式。
 - **界面中文化**：将能力槽位、主备路由、接口协议、健康状态、全链路追踪阶段/状态、审核与更新状态等英文技术标识替换为中文名称。
@@ -23,58 +31,51 @@
   - 「运维、插件与更新」新增**管理员安全设置**（修改密码与 TOTP 二步验证绑定入口）。
 
 ## v1.3.6 (2026-11-25)
-- **TTS Character-Count Usage Tracking**: Added `today_chars` and `total_chars` (Unicode character count of `cleaned_text` for synthesized TTS deliveries) to `/api/dashboard/overview` and `by_slot` (`unit: "chars"`), and updated the WebUI Dashboard TTS KPI card and slot breakdown table to report voice synthesis consumption in characters.
+- **语音合成字符数统计**：在 `/api/dashboard/overview` 与分槽位明细 `by_slot`（`unit: "chars"`）中新增 `today_chars` 与 `total_chars`（统计成功合成的 `cleaned_text` Unicode 字符数），并在仪表盘 TTS KPI 卡片与分槽位表格中以字符数展示语音合成消耗。
 
 ## v1.3.5 (2026-11-25)
-- **Token-Only Usage Tracking**: Removed dollar/money cost & budget displays from Dashboard KPIs, slot tables, and Provider editor modal; Dashboard now focuses purely on Today's Token Consumption, 7-Day Total Tokens, Input/Output/Cached Token breakdown, and Prompt Cache hit rate (`daily_budget_usd` defaults to `0.0` / disabled).
+- **纯 Token 消耗统计**：移除仪表盘 KPI 卡片、槽位明细表及模型编辑器弹窗中的美元费用与预算展示；仪表盘聚焦当日 Token 消耗、窗口期总 Token、输入/输出/缓存 Token 明细及 Prompt Cache 命中率（`daily_budget_usd` 默认设为 `0.0` 即不启用预算限制）。
 
 ## v1.3.4 (2026-11-25)
-- **TypeSafe AI Jev (`typesafe_systemone`) Official Schema Fix**:
-  - Switched Gatekeeper & health-probe request payloads from non-standard `enum`/`boolean` to official TypeSafe System One `choice` (with `criteria` map) and `noul` primitives.
-  - Updated `_parse_jev_response()` to parse official `answers.target.choice`, `confidence`, and `answers.should_chime_in.noul` (while retaining backward compatibility).
-  - Normalized System One endpoint URL construction so both `https://api.typesafe.ai` and OpenCode Zen `https://opencode.ai/zen/v1` resolve cleanly without duplicate `/v1`.
-- **Smart Failover Circuit-Breaker & Auto-Recovery**:
-  - Added error-aware cooldown routing across all slots (`chat_complete` & `evaluate_gatekeeper_slot`): HTTP `429`/`402` quota exhaustion immediately places `primary` into cooldown and routes subsequent traffic straight to `fallback` with 0ms wasted latency.
-  - Supports `Retry-After` headers, `extra_config.quota_cooldown_seconds` (default 1h with exponential backoff up to 6h), and `extra_config.quota_reset_utc_hour` for periodic daily-resetting free quotas.
-  - Automatic half-open recovery: once cooldown expires, the next request probes `primary` and seamlessly restores it on HTTP 200.
-  - Added `POST /api/providers/{id}/reset-cooldown` and WebUI cooldown status badge + one-click「恢复主路」button.
+- **TypeSafe AI Jev（`typesafe_systemone`）官方协议适配**：
+  - 将门卫判定与健康探针请求体从非标准的 `enum`/`boolean` 切换为官方 TypeSafe System One 的 `choice`（含 `criteria` 映射）与 `noul` 原语。
+  - 更新 `_parse_jev_response()` 以解析官方 `answers.target.choice`、`confidence` 与 `answers.should_chime_in.noul` 字段（同时保留向后兼容）。
+  - 规范化 System One 接口 URL 拼接，确保 `https://api.typesafe.ai` 与 OpenCode Zen `https://opencode.ai/zen/v1` 均可正确解析，避免重复 `/v1`。
+- **智能故障转移熔断器与自动恢复**：
+  - 为所有能力槽位（`chat_complete` 与 `evaluate_gatekeeper_slot`）接入错误感知冷却路由：遇到 HTTP `429`/`402` 配额耗尽时立即将 `primary` 置入冷却期，后续流量以 0ms 延迟直接路由至 `fallback`。
+  - 支持解析 `Retry-After` 响应头、`extra_config.quota_cooldown_seconds`（默认 1 小时起并指数退避至最高 6 小时）以及 `extra_config.quota_reset_utc_hour`（适配每日定时重置的免费额度）。
+  - 半开自动恢复：冷却期结束后，下一次请求自动探测 `primary`，返回 HTTP 200 即无缝恢复主路。
+  - 新增 `POST /api/providers/{id}/reset-cooldown` 接口与 WebUI 冷却状态徽章、一键「恢复主路」按钮。
 
-# Changelog
-
-## [1.3.3] - 2026-11-25（全量累计 Git 发布包）
-
-### Added
+## v1.3.3 (2026-11-25)（全量累计 Git 发布包）
+### 新增
 - **随时间衰减的单人专注关注度（Time-Decaying Attention Window）**：
-  - 群友通过 `@小呆呆`、直呼小名或引用机器人进行强唤醒后，系统按 `(群号, QQ号)` 锁定关注度：**0–60 秒（1 分钟）热聊期**门槛降至 `0.35`（后续搭话无需每次 `@` 或引用）；**60–240 秒（1–4 分钟）衰减期**门槛平滑线性回升至 `0.78`；超过 4 分钟自然归零。
+  - 群友通过 `@机器人`、直呼小名或引用机器人进行强唤醒后，系统按 `(群号, QQ号)` 锁定关注度：**0–60 秒（1 分钟）热聊期**门槛降至 `0.35`（后续搭话无需每次 `@` 或引用）；**60–240 秒（1–4 分钟）衰减期**门槛平滑线性回升至 `0.78`；超过 4 分钟自然归零。
   - 若期间该群友 `@他人`、引用他人消息或说出「好了 / 没事了 / 退下」等结束语，关注度立即清零；同群其他人的聊天完全不受干扰。
 
-### Changed
+### 变更
 - **分层超时策略**：`direct_pass`（直接呼唤/私聊）绝不丢弃、超理想耗时仅仪表盘告警；门卫设置 18 秒安全降级上限（防 120 秒死等并记告警）；仅对严重过时的主动插嘴 `soft_entry`（耗时 ≥35 秒且已被新消息刷过 ≥5 条）执行静默放弃。
 
-## [1.3.0 – 1.3.2] - 2026-11-25（已全部包含在本全量包内）
+## v1.3.0 – v1.3.2 (2026-11-25)（已全部包含在本全量包内）
 - 非阻塞 WS 派发、智能按需引用、门卫最近 5 条上下文归属感知、主脑 `[发言人归属锚点]`、机器人自身回复入库 L1、表情包语境自动打标、慢响应仪表盘告警与 WebUI 全面视觉精修。
 
-## [1.2.0] - 2026-11-25
-
+## v1.2.0 (2026-11-25)
 - 管理后台新增「系统在线更新」，支持检查受控 Git 更新源、安装版本和查看审计记录。
 - 独立宿主机服务使用 HMAC-SHA256、60 秒有效期和持久任务去重。业务容器只访问签名接口。
 - 更新前备份 PostgreSQL 并保留旧镜像。健康检测核对实际运行提交，失败时恢复上一提交和旧镜像。
 - 保留现网 SnowLuma 令牌、网络覆盖配置和豆包 V3 合成。新增 PostgreSQL 更新审计表。
 
-## [1.1.1] - 2026-11-25
-
+## v1.1.1 (2026-11-25)
 - 合并「记忆意识海」菜单，增加 HTML 转义和模型路由 PATCH 编辑，保留未修改的模型额外配置。
 - 按合成、提交及受理记录语音状态。现网 PostgreSQL 迁移保留完整脚本执行。
 
-
-## [1.1.0] - 2026-11-25
-
-### Fixed (基于线上运行诊断 `小呆呆运行诊断-20261125`)
+## v1.1.0 (2026-11-25)
+### 修复（基于线上运行诊断 `20261125`）
 - **数据库 Schema 对齐与老库无损迁移**：在 `db/init.sql` 补齐 `memory_episodes.embedding_json` 字段，新增幂等迁移脚本 `db/migrations_v1_1.sql` 并在 PostgreSQL 启动时自动安全执行，彻底消除新老库字段差异。
-- **探针流量与生产指标彻底隔离**：为 `usage_metrics` 新增 `source`（`production` / `probe` / `sandbox` / `reflection`）字段；仪表盘延迟、P95 TTFT 与费用统计自动排除健康探针样本，并在真实调用成功时自动刷新 `last_health_status = 'healthy'`（解决模型探针长期显示 `unknown` 的问题）。
+- **探针流量与生产指标彻底隔离**：为 `usage_metrics` 新增 `source`（`production` / `probe` / `sandbox` / `reflection`）字段；仪表盘延迟、P95 TTFT 与统计指标自动排除健康探针样本，并在真实调用成功时自动刷新 `last_health_status = 'healthy'`（解决模型探针长期显示 `unknown` 的问题）。
 - **TTS 合成与 OneBot 受理状态拆分**：在 `tts_deliveries` 中拆分 `synthesis_status`（音频合成）与 `onebot_status`（OneBot 受理回执），并关联 `request_id` 与 `onebot_echo`。
 
-### Added
+### 新增
 - **统一 `request_id` 全链路脱敏追踪**：新增 `pipeline_traces` 表与 `/api/dashboard/traces` 接口，用同一 `request_id` 串联 `inbound -> gatekeeper -> main_brain -> tts -> onebot` 各阶段耗时与状态，运维日志绝不打印聊天正文。
 - **TypeSafe AI Jev 原生门卫协议支持**：在模型总控中心新增 `typesafe_systemone` 协议（原生调用 `POST /v1/systemone` 的 `state` + `questions` 结构并解析校准概率），同时将 `gatekeeper` 槽位正式接入主链路（支持 OpenAI 兼容小模型作为备用路由）。
 - **门卫与语音意图标注回归评测**：新增 `POST /api/persona/sandbox/benchmark`，支持使用标注群聊样本批量统计误接（FP）、漏接（FN）与语音意图误判率。
