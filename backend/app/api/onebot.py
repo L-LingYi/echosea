@@ -1,6 +1,7 @@
 """SnowLuma OneBot v11 Ingress Endpoints (Reverse WebSocket + HTTP Event Webhook)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -51,13 +52,16 @@ async def snowluma_reverse_ws(
                 continue
             if runtime.shutting_down:
                 continue
-            async with runtime.db_manager.session_factory() as session:
-                try:
-                    await runtime.pipeline.handle_raw_onebot_event(session, data)
-                    await session.commit()
-                except Exception as exc:
-                    await session.rollback()
-                    logger.exception("Error processing SnowLuma WS event: %s", exc)
+            async def _handle_bg(ev: dict) -> None:
+                async with runtime.db_manager.session_factory() as session:
+                    try:
+                        await runtime.pipeline.handle_raw_onebot_event(session, ev)
+                        await session.commit()
+                    except Exception as exc:
+                        await session.rollback()
+                        logger.exception("Error processing SnowLuma WS event: %s", exc)
+
+            asyncio.create_task(_handle_bg(data))
     except WebSocketDisconnect:
         logger.warning("SnowLuma Reverse WebSocket disconnected")
     finally:

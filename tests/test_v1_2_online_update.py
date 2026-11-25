@@ -38,9 +38,9 @@ def test_online_update_github_check_trigger_callback_and_rollback_alert():
             return {"status": "running"}
         assert "api.github.com/repos/demo/companion/releases/latest" in url
         return {
-            "tag_name": "v1.3.0",
+            "tag_name": "v9.9.0",
             "body": "新增语音情绪微调与性能优化",
-            "html_url": "https://github.com/demo/companion/releases/tag/v1.3.0",
+            "html_url": "https://github.com/demo/companion/releases/tag/v9.9.0",
         }
 
     async def fake_updater_post(url: str, headers: dict[str, str], body: bytes):
@@ -82,17 +82,17 @@ def test_online_update_github_check_trigger_callback_and_rollback_alert():
         chk = client.get("/api/system/update/check", headers=headers).json()
         assert chk["mode"] == "github_public"
         assert chk["update_available"] is True
-        assert chk["latest_version"] == "v1.3.0"
+        assert chk["latest_version"] == "v9.9.0"
 
         # 2. Trigger signed update
-        trig = client.post("/api/system/update/trigger", headers=headers, json={"target_ref": "v1.3.0"})
+        trig = client.post("/api/system/update/trigger", headers=headers, json={"target_ref": "v9.9.0"})
         assert trig.status_code == 200
         job_uid = trig.json()["job_uid"]
         assert trig.json()["status"] == "running"
         assert len(posted_requests) == 1
 
         # 3. Concurrent trigger while job is running -> rejected (400)
-        dup = client.post("/api/system/update/trigger", headers=headers, json={"target_ref": "v1.3.0"})
+        dup = client.post("/api/system/update/trigger", headers=headers, json={"target_ref": "v9.9.0"})
         assert dup.status_code == 400
 
         # 4. Unsigned callback rejected (403)

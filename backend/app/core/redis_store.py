@@ -114,6 +114,25 @@ class StateStore:
             return int(data["peer"])
         return None
 
+    async def record_user_attention(
+        self, group_id: int, user_qq: int, ttl_seconds: int = 260
+    ) -> None:
+        """Refresh per-user focused attention timestamp after bot interacts with this user."""
+        await self.set_json(
+            f"attention:{group_id}:{user_qq}",
+            {"ts": time.time()},
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def clear_user_attention(self, group_id: int, user_qq: int) -> None:
+        await self.delete(f"attention:{group_id}:{user_qq}")
+
+    async def get_user_attention_age_seconds(self, group_id: int, user_qq: int) -> float | None:
+        data = await self.get_json(f"attention:{group_id}:{user_qq}")
+        if data and isinstance(data, dict) and "ts" in data:
+            return max(0.0, time.time() - float(data["ts"]))
+        return None
+
     async def record_bot_turn(self, group_id: int, reset: bool = False) -> int:
         key = f"bot_turns:{group_id}"
         if reset:

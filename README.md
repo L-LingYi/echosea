@@ -1,4 +1,4 @@
-# Companion System v1.2.0（陪伴系统 · 完整三期全功能生产版）
+# Companion System v1.3.3（陪伴系统 · 完整三期全功能生产版）
 
 面向 Linux / Docker 云端 24 小时长期运行、群聊优先兼顾私聊的独立拟人陪伴系统，原生适配 **SnowLuma（OneBot v11）** 网关，完整覆盖规格书全部 10 大子系统与三期路线图。
 

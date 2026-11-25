@@ -82,3 +82,46 @@ async def delete_sticker(
         raise HTTPException(status_code=404, detail="Sticker not found")
     await session.delete(asset)
     return {"ok": True}
+
+
+@router.post("/{sticker_id}/auto-tag")
+async def auto_tag_sticker(
+    sticker_id: int,
+    body: dict[str, Any] | None = None,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    """Trigger AI context understanding & automatic emotion tagging for a collected sticker."""
+    from app.models.db import ChatMessage
+    asset = await session.get(StickerAsset, sticker_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Sticker not found")
+    body = body or {}
+    surrounding = body.get("context_messages") or []
+    if not surrounding and asset.source_group_id:
+        rows = list(
+            (
+                await session.execute(
+                    select(ChatMessage.sender_display_name, ChatMessage.raw_text)
+                    .where(ChatMessage.group_id == asset.source_group_id, ChatMessage.is_recalled.is_(False))
+                    .order_by(ChatMessage.id.desc())
+                    .limit(6)
+                )
+            ).all()
+        )
+        surrounding = [f"{r[0]}: {r[1]}" for r in reversed(rows) if r[1]]
+    if asset.context_hint:
+        surrounding.append(asset.context_hint)
+    updated = await runtime.sticker_service.auto_tag_with_context(
+        session=session,
+        asset=asset,
+        surrounding_messages=surrounding,
+        model_hub=runtime.model_hub,
+    )
+    return {
+        "ok": True,
+        "id": updated.id,
+        "emotion_tags": updated.emotion_tags,
+        "context_hint": updated.context_hint,
+    }

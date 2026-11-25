@@ -43,14 +43,33 @@ class AutoStickerReactionPlugin(CompanionPlugin):
             group_id = int(env["group_id"])
             async with runtime.db_manager.session_factory() as session:
                 media = env.get("media_meta") or []
+                from sqlalchemy import select as _sel
+                from app.models.db import ChatMessage as _CM
+                recent_rows = list(
+                    (
+                        await session.execute(
+                            _sel(_CM.sender_display_name, _CM.raw_text)
+                            .where(_CM.scene == "group", _CM.group_id == group_id, _CM.is_recalled.is_(False))
+                            .order_by(_CM.id.desc())
+                            .limit(5)
+                        )
+                    ).all()
+                )
+                surrounding = [f"{r[0]}: {r[1]}" for r in reversed(recent_rows) if r[1]]
                 for item in media:
                     if item.get("type") in ("image", "mface") and item.get("url"):
-                        await runtime.sticker_service.observe_group_image(
+                        asset = await runtime.sticker_service.observe_group_image(
                             session=session,
                             group_id=group_id,
                             phash=f"url_{abs(hash(item['url'])) % (10**16):016x}",
                             source_url=str(item["url"]),
                             context_hint=str(env.get("raw_text") or ""),
+                        )
+                        await runtime.sticker_service.auto_tag_with_context(
+                            session=session,
+                            asset=asset,
+                            surrounding_messages=surrounding,
+                            model_hub=runtime.model_hub,
                         )
                 raw_text = str(env.get("raw_text") or "")
                 if raw_text:

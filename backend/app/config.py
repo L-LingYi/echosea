@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "Companion System"
-    app_version: str = "1.2.0"
+    app_version: str = "1.3.3"
     environment: str = "production"
     log_level: str = "INFO"
 
@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     daily_budget_usd: float = 5.0
     budget_alert_ratio: float = 0.8
     soft_entry_threshold: float = 0.78
+    ideal_gatekeeper_ms: int = 5000           # Soft SLA: warn on dashboard if gatekeeper exceeds this (never drops)
+    ideal_reply_ms: int = 15000               # Soft SLA: warn on dashboard if total reply exceeds this
+    gatekeeper_fallback_timeout_seconds: float = 18.0  # Gatekeeper safety cap -> fallback to rules + alert (never hangs 120s)
+    stale_soft_entry_seconds: float = 35.0    # Drop ONLY severely stale proactive soft_entry (direct_pass is NEVER dropped)
+    stale_soft_entry_min_msgs: int = 5
+    attention_hot_seconds: float = 60.0       # 0-60s: hot follow-up window after strong wake-up
+    attention_decay_seconds: float = 240.0    # 60-240s (4 min): linear attention decay back to normal threshold
+    smart_quote_min_intervening: int = 3      # Quote only when >=3 newer group msgs pushed target up
+    smart_quote_min_delay_seconds: float = 25.0  # Or when generation took >=25s
     ambient_summary_trigger_count: int = 20
     dm_bridge_window_minutes: int = 30
     plugin_timeout_seconds: float = 5.0

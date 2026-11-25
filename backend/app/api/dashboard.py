@@ -129,6 +129,16 @@ async def dashboard_overview(
         (await session.execute(select(func.count(StickerAsset.id)).where(StickerAsset.status == "approved"))).scalar_one()
         or 0
     )
+    slow_response_alerts = int(
+        (
+            await session.execute(
+                select(func.count(AlertEvent.id)).where(
+                    AlertEvent.created_at >= since, AlertEvent.category == "slow_response"
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
     recent_alerts = list(
         (await session.execute(select(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(5))).scalars().all()
     )
@@ -146,6 +156,7 @@ async def dashboard_overview(
             "total_calls": int(total_calls),
             "avg_ttft_ms": round(float(avg_ttft), 1),
             "p95_ttft_ms": p95_ttft,
+            "slow_response_alerts": slow_response_alerts,
         },
         "cost": {
             "window_cost_usd": round(float(total_cost), 6),

@@ -159,3 +159,65 @@ class StickerService:
             if tag_lower in tags or tag_lower in (row.context_hint or "").lower():
                 return row
         return rows[0] if rows else None
+
+
+    async def auto_tag_with_context(
+        self,
+        session: AsyncSession,
+        asset: StickerAsset,
+        surrounding_messages: list[str],
+        model_hub: Any = None,
+    ) -> StickerAsset:
+        """Understand & auto-tag a collected sticker using surrounding group chat context (when & why members use it)."""
+        context_blob = "\n".join(m for m in surrounding_messages[-6:] if m.strip())
+        # 1. Try LLM understanding via reflection slot if available
+        if model_hub is not None and context_blob:
+            import json as _json
+            prompt = (
+                "根据下面群友发表情包前后的聊天上下文，总结这张表情包的适用情绪标签(2-4个简短中文词)和你对它使用场景的理解(30字以内)。\n"
+                '仅输出 JSON：{"emotion_tags":["无语","吐槽"],"context_hint":"群友遇到离谱或踩坑时用来表达崩溃无语"}\n\n'
+                f"上下文：\n{context_blob}"
+            )
+            try:
+                res = await model_hub.chat_complete(
+                    session,
+                    slot="reflection",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=160,
+                    source="reflection",
+                )
+                parsed = _json.loads(res.content)
+                tags = [str(t).strip() for t in (parsed.get("emotion_tags") or []) if str(t).strip()][:5]
+                hint = str(parsed.get("context_hint") or "").strip()[:160]
+                if tags:
+                    asset.emotion_tags = list(dict.fromkeys([*(asset.emotion_tags or []), *tags]))
+                if hint:
+                    asset.context_hint = hint
+                await session.flush()
+                return asset
+            except Exception:
+                pass
+
+        # 2. Deterministic context-aware heuristic tagger fallback
+        cue_map = [
+            (("哈哈", "笑死", "乐", "草", "绷不住"), "大笑", "群友被逗乐或看热闹起哄时使用"),
+            (("欠费", "崩了", "寄了", "完了", "死机", "离谱"), "崩溃无语", "群友踩坑、报错或遇到离谱事时吐槽使用"),
+            (("摸鱼", "困", "睡", "累", "下班"), "摸鱼摆烂", "聊到上班摸鱼、犯困或想躺平时使用"),
+            (("赞", "强", "厉害", "牛", "666", "开智"), "点赞吹捧", "夸奖群友或惊叹操作时使用"),
+            (("吃", "火锅", "烧烤", "饿", "干饭"), "干饭嘴馋", "群里聊美食或约饭时使用"),
+        ]
+        matched_tags: list[str] = []
+        matched_hints: list[str] = []
+        for cues, tag, hint in cue_map:
+            if any(c in context_blob for c in cues):
+                matched_tags.append(tag)
+                matched_hints.append(hint)
+
+        if matched_tags:
+            asset.emotion_tags = list(dict.fromkeys([t for t in (asset.emotion_tags or []) if t != "fun"] + matched_tags))
+            asset.context_hint = "；".join(matched_hints[:2])
+        elif context_blob and not asset.context_hint:
+            asset.context_hint = f"群聊语境：「{context_blob[:60]}」时发出"
+        await session.flush()
+        return asset

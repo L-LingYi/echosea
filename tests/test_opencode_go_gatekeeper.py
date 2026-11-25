@@ -23,7 +23,7 @@ async def test_go_session_is_stable_for_a_group_and_json_is_gatekeeper_only(monk
     hub = ModelHubService(master_key, AlertService(master_key))
     provider = SimpleNamespace(
         base_url="https://opencode.ai/inference/go/openai/v1",
-        slot="gatekeeper", model_name="deepseek-v4.1-flash", timeout_seconds=5,
+        slot="gatekeeper", model_name="deepseek-v4.1-flash", timeout_seconds=5, extra_config={},
     )
     messages = [{"role": "user", "content": "Return JSON for this synthetic sample."}]
 

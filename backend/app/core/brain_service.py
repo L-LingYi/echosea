@@ -26,7 +26,7 @@ from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService, extract_sticker_tags
 from app.core.tts_service import DoubaoTTSService, detect_voice_intent
 from app.core.web_perception_service import WebPerceptionService, needs_fast_web_search
-from app.models.db import PersonaVersion, PipelineTrace, SystemConfig
+from app.models.db import ChatMessage, PersonaVersion, PipelineTrace, SystemConfig
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,13 @@ class CompanionPipeline:
         group_rate_limit_per_min: int = 12,
         global_rate_limit_per_min: int = 40,
         ambient_summary_trigger_count: int = 20,
+        ideal_gatekeeper_ms: int = 5000,
+        ideal_reply_ms: int = 15000,
+        gatekeeper_fallback_timeout_seconds: float = 18.0,
+        stale_soft_entry_seconds: float = 35.0,
+        stale_soft_entry_min_msgs: int = 5,
+        smart_quote_min_intervening: int = 3,
+        smart_quote_min_delay_seconds: float = 25.0,
     ) -> None:
         self.store = store
         self.identity_service = identity_service
@@ -139,6 +146,13 @@ class CompanionPipeline:
         self.group_rate_limit_per_min = group_rate_limit_per_min
         self.global_rate_limit_per_min = global_rate_limit_per_min
         self.ambient_summary_trigger_count = ambient_summary_trigger_count
+        self.ideal_gatekeeper_ms = ideal_gatekeeper_ms
+        self.ideal_reply_ms = ideal_reply_ms
+        self.gatekeeper_fallback_timeout_seconds = gatekeeper_fallback_timeout_seconds
+        self.stale_soft_entry_seconds = stale_soft_entry_seconds
+        self.stale_soft_entry_min_msgs = stale_soft_entry_min_msgs
+        self.smart_quote_min_intervening = smart_quote_min_intervening
+        self.smart_quote_min_delay_seconds = smart_quote_min_delay_seconds
         self._group_msg_counters: dict[int, int] = {}
 
     @staticmethod
@@ -265,6 +279,9 @@ class CompanionPipeline:
         session_scope = (
             f"group:{envelope.group_id}" if envelope.group_id is not None else f"private:{envelope.sender_qq}"
         )
+        t_start = time.perf_counter()
+        if not (envelope.raw_text or "").strip() and not envelope.media_meta:
+            return {"handled": "empty_message_ignored", "request_id": request_id}
 
         # 1. Strong QQ Identity Binding
         await self.identity_service.upsert_from_message(
@@ -289,18 +306,38 @@ class CompanionPipeline:
         self.gatekeeper.soft_entry_threshold = float(cfg.get("soft_entry_threshold", self.gatekeeper.soft_entry_threshold))
 
         async def _gatekeeper_model_scorer(env: MessageEnvelope, default_target: str) -> dict[str, Any] | None:
+            recent_lines: list[str] = []
+            if env.scene == "group" and env.group_id is not None:
+                r_stmt = (
+                    select(ChatMessage.sender_display_name, ChatMessage.raw_text)
+                    .where(
+                        ChatMessage.scene == "group",
+                        ChatMessage.group_id == env.group_id,
+                        ChatMessage.is_recalled.is_(False),
+                    )
+                    .order_by(ChatMessage.id.desc())
+                    .limit(5)
+                )
+                recent_lines = [f"{r[0]}: {r[1]}" for r in reversed((await session.execute(r_stmt)).all()) if r[1]]
+            ctx_block = "\n".join(recent_lines) if recent_lines else "(none)"
             state_text = (
                 f"Bot name: {persona.bot_name} (aliases: {', '.join(persona.aliases or [])})\n"
-                f"Group: {env.group_id} | Sender: {env.display_name}\n"
+                f"Group: {env.group_id}\n"
+                f"Recent group context (oldest -> newest):\n{ctx_block}\n"
+                f"Latest sender: {env.display_name} (QQ:{env.sender_qq})\n"
                 f"Quoted: {env.expanded_reply_text or 'none'}\n"
-                f"Message: {env.raw_text}"
+                f"Latest message: {env.raw_text}"
             )
+            att_age = await self.store.get_user_attention_age_seconds(env.group_id or 0, env.sender_qq) if env.scene == 'group' else None
+            if att_age is not None:
+                state_text += f"\n[Active Attention Window] Bot replied to this user {int(att_age)}s ago; prefer continuing conversation unless clearly talking to someone else."
             return await self.model_hub.evaluate_gatekeeper_slot(
                 session=session,
                 state_text=state_text,
                 default_target=default_target,
                 request_id=request_id,
                 session_scope=session_scope,
+                timeout_override=self.gatekeeper_fallback_timeout_seconds,
             )
 
         decision = await self.gatekeeper.evaluate(
@@ -312,11 +349,21 @@ class CompanionPipeline:
             admin_qq=self.admin_qq,
             llm_scorer=_gatekeeper_model_scorer,
         )
+        gk_ms = int((time.perf_counter() - t_gk) * 1000)
+        gk_slow = gk_ms > self.ideal_gatekeeper_ms
         await self._trace(
             session, request_id, envelope.scene, envelope.group_id, "gatekeeper", decision.action,
-            latency_ms=int((time.perf_counter() - t_gk) * 1000),
-            meta={"target": decision.target, "score": decision.score},
+            latency_ms=gk_ms,
+            meta={"target": decision.target, "score": decision.score, "slow": gk_slow},
         )
+        if gk_slow:
+            await self.model_hub.alert_service.notify(
+                session=session,
+                severity="warning",
+                category="slow_response",
+                title=f"门卫耗时超过理想阈值 ({gk_ms}ms > {self.ideal_gatekeeper_ms}ms)",
+                detail=f"请求 {request_id} 门卫判定耗时 {gk_ms}ms，已继续正常处理未丢弃消息。",
+            )
 
         # 4. Dual-Path Persistence: ALWAYS record message (Ambient Memory never drops silent group chat!)
         if decision.action != "blocked_recall":
@@ -406,7 +453,7 @@ class CompanionPipeline:
                 slot="main_brain",
                 messages=messages,
                 temperature=0.75,
-                max_tokens=300 if decision.action == "direct_pass" else 120,
+                max_tokens=600 if decision.action == "direct_pass" else 160,
                 source="production",
                 request_id=request_id,
                 session_scope=session_scope,
@@ -426,6 +473,33 @@ class CompanionPipeline:
 
         if await self.store.is_recalled(envelope.message_id):
             return {"handled": "aborted_recalled_before_send", "request_id": request_id, "decision": decision.model_dump()}
+
+        # Tiered SLA Policy:
+        # - direct_pass (explicit wake-up / DM): NEVER dropped; only warn on Dashboard if > ideal_reply_ms.
+        # - soft_entry (unsolicited chime-in): warn on Dashboard if slow, and drop ONLY if severely stale (>=35s & >=5 newer msgs).
+        total_elapsed_s = time.perf_counter() - t_start
+        total_elapsed_ms = int(total_elapsed_s * 1000)
+        if total_elapsed_ms > self.ideal_reply_ms:
+            await self.model_hub.alert_service.notify(
+                session=session,
+                severity="warning",
+                category="slow_response",
+                title=f"回复处理超过理想耗时 ({total_elapsed_ms}ms > {self.ideal_reply_ms}ms)",
+                detail=f"请求 {request_id} ({decision.action}) 总耗时 {total_elapsed_ms}ms。",
+            )
+        if (
+            decision.action == "soft_entry"
+            and envelope.scene == "group"
+            and envelope.group_id is not None
+            and total_elapsed_s >= self.stale_soft_entry_seconds
+        ):
+            newer_cnt = await self.count_newer_group_messages(session, envelope.group_id, envelope.message_id)
+            if newer_cnt >= self.stale_soft_entry_min_msgs:
+                await self._trace(
+                    session, request_id, envelope.scene, envelope.group_id, "onebot", "aborted_stale_soft_entry",
+                    meta={"elapsed_s": round(total_elapsed_s, 1), "newer_msgs": newer_cnt},
+                )
+                return {"handled": "aborted_stale_soft_entry", "request_id": request_id, "decision": decision.model_dump()}
 
         # 9. Extract Sticker Tags + Anti-AI-Flavor Sanitization
         text_without_tags, sticker_tags = extract_sticker_tags(completion.content)
@@ -469,12 +543,20 @@ class CompanionPipeline:
                         "provider": completion.provider_name,
                     }
 
-        # 11. Natural Bubble Splitting + Outbox Delivery + Optional Sticker Trigger
+        # 11. Natural Bubble Splitting + Smart Buried-Only Quoting (evaluated at send time!)
         t_ob = time.perf_counter()
+        should_quote = False
+        if envelope.scene == "group" and envelope.group_id is not None:
+            should_quote = await self.should_quote_target(
+                session=session,
+                group_id=envelope.group_id,
+                target_message_id=envelope.message_id,
+                elapsed_seconds=(time.perf_counter() - t_start),
+            )
         bubbles = split_natural_bubbles(cleaned, max_bubbles=int(cfg.get("max_bubbles", 3)))
         deliveries = []
         for idx, bubble in enumerate(bubbles):
-            reply_id = envelope.message_id if (idx == 0 and envelope.scene == "group") else None
+            reply_id = envelope.message_id if (idx == 0 and should_quote) else None
             delivery = await self.adapter.send_message(
                 session=session,
                 scene=envelope.scene,
@@ -510,6 +592,29 @@ class CompanionPipeline:
                 stk_out.request_id = request_id
                 sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
 
+        # Persist bot's own reply into L1 working memory so future turns know who said what
+        bot_qq = envelope.self_qq or self.adapter.bot_qq
+        if bot_qq and bubbles:
+            await self.identity_service.upsert_from_message(
+                session, qq_id=bot_qq, nickname=persona.bot_name, group_id=envelope.group_id, group_card=persona.bot_name
+            )
+            session.add(
+                ChatMessage(
+                    message_id=f"bot_{request_id}",
+                    scene=envelope.scene,
+                    group_id=envelope.group_id,
+                    sender_qq=bot_qq,
+                    sender_display_name=persona.bot_name,
+                    raw_text=" ".join(bubbles),
+                    expanded_reply_text=f"{envelope.display_name}: {envelope.raw_text}" if should_quote else None,
+                    gatekeeper_decision="bot_reply",
+                    gatekeeper_score=1.0,
+                    is_recalled=False,
+                    is_ambient_only=False,
+                )
+            )
+            await session.flush()
+
         await self.event_bus.emit(
             "on_reply_sent",
             {"request_id": request_id, "scene": envelope.scene, "target_id": target_id, "bubbles": bubbles, "sticker": sent_sticker},
@@ -524,6 +629,50 @@ class CompanionPipeline:
             "provider": completion.provider_name,
             "used_fallback": completion.used_fallback,
         }
+
+
+    async def count_newer_group_messages(
+        self,
+        session: AsyncSession,
+        group_id: int,
+        target_message_id: str,
+    ) -> int:
+        from sqlalchemy import func as _sql_func
+        target_row = (
+            await session.execute(
+                select(ChatMessage.id)
+                .where(ChatMessage.group_id == group_id, ChatMessage.message_id == target_message_id)
+                .order_by(ChatMessage.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if target_row is None:
+            return 0
+        return int(
+            (
+                await session.execute(
+                    select(_sql_func.count(ChatMessage.id)).where(
+                        ChatMessage.group_id == group_id,
+                        ChatMessage.scene == "group",
+                        ChatMessage.id > target_row,
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+
+    async def should_quote_target(
+        self,
+        session: AsyncSession,
+        group_id: int,
+        target_message_id: str,
+        elapsed_seconds: float = 0.0,
+    ) -> bool:
+        """Smart Quoting: only quote in group chat if target message was buried by >=N newer messages or reply took >=25s."""
+        if elapsed_seconds >= self.smart_quote_min_delay_seconds:
+            return True
+        newer_count = await self.count_newer_group_messages(session, group_id, target_message_id)
+        return newer_count >= self.smart_quote_min_intervening
 
     @staticmethod
     def build_prompt_messages(
@@ -575,11 +724,25 @@ class CompanionPipeline:
                 "[群内常用黑话] " + ", ".join(f"{s['phrase']}({s['meaning']})" for s in memory_ctx["l4_group_slang"])
             )
         if memory_ctx["l1_working"]:
-            recent = "\n".join(
-                f"{m['sender']}: {m['text']}" + (f" (引用: {m['reply_to']})" if m.get("reply_to") else "")
-                for m in memory_ctx["l1_working"][-12:]
-            )
-            dynamic_parts.append(f"[近期对话记录]\n{recent}")
+            # Exclude duplicate trailing copy of the exact current user message
+            history_items = list(memory_ctx["l1_working"][-14:])
+            if (
+                history_items
+                and history_items[-1].get("sender_qq") == envelope.sender_qq
+                and history_items[-1].get("text") == envelope.raw_text
+            ):
+                history_items = history_items[:-1]
+            if history_items:
+                recent = "\n".join(
+                    f"[{m['sender']}(QQ:{m['sender_qq']})]: {m['text']}"
+                    + (f" (引用: {m['reply_to']})" if m.get("reply_to") else "")
+                    for m in history_items[-12:]
+                )
+                dynamic_parts.append(f"[近期群聊/私聊上下文（严格按发言人区分，切勿张冠李戴）]\n{recent}")
+        dynamic_parts.append(
+            f"[发言人归属锚点] 下面即将回复的这条消息由「{envelope.display_name}」(QQ:{envelope.sender_qq})发出。"
+            "请务必分清上下文中每一位群友各自说的话，不要把别人(例如前一条发言人)的特征或观点错安到当前发言人头上。"
+        )
 
         if decision.action == "soft_entry":
             dynamic_parts.append(f"[发言约束] 本次为降权软切入，请保持极简短吐槽或接梗，不超过 {decision.suggested_max_chars} 字。")

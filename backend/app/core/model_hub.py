@@ -273,6 +273,7 @@ class ModelHubService:
         default_target: str,
         request_id: str | None = None,
         session_scope: str | None = None,
+        timeout_override: float | None = None,
     ) -> dict[str, Any] | None:
         """Invoke configured 'gatekeeper' slot: natively supports TypeSafe AI Jev (`typesafe_systemone`)
         or standard `openai_compatible` fallback. Returns {'target': ..., 'score': ..., 'reason': ...} or None.
@@ -290,7 +291,7 @@ class ModelHubService:
             "target": {
                 "type": "enum",
                 "options": ["bot", "other_user", "third_person_about_bot", "group_open"],
-                "instructions": "Classify who this group chat message is addressed to.",
+                "instructions": "Using the recent group chat context, classify who the latest message is addressed to. If the pronoun '你' refers to another group member who just spoke, choose 'other_user'.",
             },
             "should_chime_in": {
                 "type": "boolean",
@@ -306,7 +307,7 @@ class ModelHubService:
                     if self._systemone_caller is not None:
                         raw = await self._systemone_caller(provider, api_key, state_text, questions)
                     else:
-                        raw = await self._call_typesafe_systemone(provider, api_key, state_text, questions)
+                        raw = await self._call_typesafe_systemone(provider, api_key, state_text, questions, timeout_override=timeout_override)
                     parsed = self._parse_jev_response(raw, default_target)
                     usage = raw.get("usage") or {}
                     p_tok = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
@@ -316,7 +317,7 @@ class ModelHubService:
                     messages = [
                         {
                             "role": "system",
-                            "content": '你是群聊门卫，仅输出 JSON：{"target":"bot|other_user|third_person_about_bot|group_open","score":0.0-1.0,"reason":"简短原因"}',
+                            "content": '你是群聊归属门卫。务必结合最近几条群聊上下文判断最新消息里的“你”是在对刚发言的群友说话(other_user)还是对机器人说话(bot/group_open)。若明显是群友间互聊，必须判 target="other_user" 且 score<=0.2。仅输出 JSON：{"target":"bot|other_user|third_person_about_bot|group_open","score":0.0-1.0,"reason":"简短原因"}',
                         },
                         {"role": "user", "content": state_text},
                     ]
@@ -324,7 +325,9 @@ class ModelHubService:
                         raw = await self._http_caller(provider, api_key, messages, 0.1, 100)
                     else:
                         raw = await self._call_openai_compatible(
-                            provider, api_key, messages, 0.1, 100, session_scope=session_scope, gatekeeper_json=True
+                            provider, api_key, messages, 0.1, 160,
+                            session_scope=session_scope, gatekeeper_json=True,
+                            timeout_override=timeout_override, disable_thinking=True,
                         )
                     txt = raw.get("choices", [{}])[0].get("message", {}).get("content", "{}")
                     parsed = _json.loads(txt)
@@ -352,7 +355,9 @@ class ModelHubService:
                 await session.flush()
                 return parsed
             except Exception as exc:
-                logger.warning("Gatekeeper provider '%s' (%s) failed: %s", provider.name, provider.protocol, exc)
+                logger.warning("Gatekeeper provider '%s' (%s) failed [%s]: %s", provider.name, provider.protocol, type(exc).__name__, exc)
+                session.add(UsageMetric(slot="gatekeeper", provider_name=provider.name, model_name=provider.model_name, total_ms=int((time.perf_counter()-t0)*1000), source="production", request_id=request_id, success=False))
+                await session.flush()
                 continue
         return None
 
@@ -479,17 +484,28 @@ class ModelHubService:
         *,
         session_scope: str | None = None,
         gatekeeper_json: bool = False,
+        timeout_override: float | None = None,
+        disable_thinking: bool = False,
     ) -> dict[str, Any]:
         url = f"{provider.base_url.rstrip('/')}/chat/completions"
+        extra = provider.extra_config or {}
         headers = {"Content-Type": "application/json"}
+        if isinstance(extra.get("extra_headers"), dict):
+            headers.update({str(k): str(v) for k, v in extra["extra_headers"].items()})
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        payload = {
+        payload: dict[str, Any] = {
             "model": provider.model_name,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if isinstance(extra.get("extra_body"), dict):
+            payload.update(extra["extra_body"])
+        if disable_thinking and "thinking" not in payload and "reasoning_effort" not in payload:
+            if "deepseek" in provider.model_name.lower() or "qwen" in provider.model_name.lower():
+                payload["thinking"] = {"type": "disabled"}
+
         endpoint = urlsplit(url)
         if endpoint.scheme == "https" and endpoint.hostname == "opencode.ai" and endpoint.path.startswith(
             ("/zen/go/", "/inference/go/")
@@ -497,13 +513,15 @@ class ModelHubService:
             scope = session_scope or uuid.uuid4().hex
             digest = hmac.new(self.master_key.encode(), f"{provider.slot}:{scope}".encode(), hashlib.sha256).hexdigest()
             headers["x-opencode-session"] = f"ses_{digest[:32]}"
-            headers["User-Agent"] = "CompanionSystem/1.2"
+            headers["User-Agent"] = "CompanionSystem/1.3"
             if provider.slot == "gatekeeper" and provider.model_name == "deepseek-v4.1-flash":
-                payload["thinking"] = {"type": "disabled"}
-                payload["reasoning_effort"] = "none"
+                payload.setdefault("thinking", {"type": "disabled"})
+                payload.setdefault("reasoning_effort", "none")
                 if gatekeeper_json:
-                    payload["response_format"] = {"type": "json_object"}
-        async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
+                    payload.setdefault("response_format", {"type": "json_object"})
+
+        timeout_val = min(float(provider.timeout_seconds), float(timeout_override)) if timeout_override else float(provider.timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout_val) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             return resp.json()
@@ -514,6 +532,7 @@ class ModelHubService:
         api_key: str,
         state_text: str,
         questions: dict[str, Any],
+        timeout_override: float | None = None,
     ) -> dict[str, Any]:
         """Native TypeSafe AI System One endpoint: POST /v1/systemone."""
         base = provider.base_url.rstrip("/")
@@ -526,7 +545,8 @@ class ModelHubService:
             "state": state_text,
             "questions": questions,
         }
-        async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
+        timeout_val = min(float(provider.timeout_seconds), float(timeout_override)) if timeout_override else float(provider.timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout_val) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             return resp.json()

@@ -287,7 +287,7 @@ class SnowLumaAdapter:
                 headers = {}
                 if self.access_token:
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                async with websockets.connect(self.ws_url, additional_headers=headers) as ws:
+                async with websockets.connect(self.ws_url, additional_headers=headers, ping_interval=20, ping_timeout=20) as ws:
                     self._forward_ws = ws
                     self._connected_since = datetime.now(timezone.utc)
                     self._last_heartbeat = self._connected_since
@@ -302,10 +302,8 @@ class SnowLumaAdapter:
                         if data.get("post_type") == "meta_event":
                             self.record_heartbeat()
                             continue
-                        try:
-                            await on_event(data)
-                        except Exception:
-                            logger.exception("Failed to process SnowLuma event")
+                        # Non-blocking dispatch so slow LLM/gatekeeper calls never stall WS keepalive or subsequent messages
+                        asyncio.create_task(self._safe_dispatch(on_event, data))
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -394,3 +392,11 @@ class SnowLumaAdapter:
         self.sent_log.append({"scene": scene, "target_id": target_id, "type": "sticker", "file": sticker_url_or_path, "status": delivery.status})
         await session.flush()
         return delivery
+
+
+    @staticmethod
+    async def _safe_dispatch(on_event: Callable[[dict[str, Any]], Awaitable[None]], data: dict[str, Any]) -> None:
+        try:
+            await on_event(data)
+        except Exception as exc:
+            logger.exception("Async SnowLuma event handler failed: %s", exc)

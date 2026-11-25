@@ -91,6 +91,8 @@ def create_app(
             store=store,
             soft_entry_threshold=settings.soft_entry_threshold,
             max_consecutive_turns=settings.max_consecutive_group_turns,
+            attention_hot_seconds=settings.attention_hot_seconds,
+            attention_decay_seconds=settings.attention_decay_seconds,
         )
         memory_service = MemoryService(dm_bridge_window_minutes=settings.dm_bridge_window_minutes)
         model_hub = ModelHubService(
@@ -145,6 +147,13 @@ def create_app(
             group_rate_limit_per_min=settings.group_rate_limit_per_minute,
             global_rate_limit_per_min=settings.global_rate_limit_per_minute,
             ambient_summary_trigger_count=settings.ambient_summary_trigger_count,
+            ideal_gatekeeper_ms=settings.ideal_gatekeeper_ms,
+            ideal_reply_ms=settings.ideal_reply_ms,
+            gatekeeper_fallback_timeout_seconds=settings.gatekeeper_fallback_timeout_seconds,
+            stale_soft_entry_seconds=settings.stale_soft_entry_seconds,
+            stale_soft_entry_min_msgs=settings.stale_soft_entry_min_msgs,
+            smart_quote_min_intervening=settings.smart_quote_min_intervening,
+            smart_quote_min_delay_seconds=settings.smart_quote_min_delay_seconds,
         )
 
         async def _send_admin_qq(admin_qq: int, text: str) -> bool:

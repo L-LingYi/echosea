@@ -55,16 +55,23 @@ BANTER_OR_HOOK_CUES = (
 )
 
 
+GOODBYE_CUES = ("没事了", "好了", "退下", "拜拜", "先忙了", "不用了", "闭嘴", "行了")
+
+
 class GatekeeperService:
     def __init__(
         self,
         store: StateStore,
         soft_entry_threshold: float = 0.78,
         max_consecutive_turns: int = 4,
+        attention_hot_seconds: float = 60.0,
+        attention_decay_seconds: float = 240.0,
     ) -> None:
         self.store = store
         self.soft_entry_threshold = soft_entry_threshold
         self.max_consecutive_turns = max_consecutive_turns
+        self.attention_hot_seconds = attention_hot_seconds
+        self.attention_decay_seconds = attention_decay_seconds
 
     async def evaluate(
         self,
@@ -115,6 +122,7 @@ class GatekeeperService:
 
         # Record peer-to-peer interaction when user explicitly @s another group member
         if other_mentioned and not bot_mentioned:
+            await self.store.clear_user_attention(group_id, envelope.sender_qq)
             for peer_qq in other_mentioned:
                 await self.store.record_peer_interaction(group_id, envelope.sender_qq, peer_qq)
             return GatekeeperDecision(
@@ -127,6 +135,7 @@ class GatekeeperService:
 
         # Explicit @bot or accurate reply-to-bot -> High-priority direct pass
         if bot_mentioned or replied_to_bot:
+            await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
             await self.store.record_bot_turn(group_id, reset=True)
             return GatekeeperDecision(
                 action="direct_pass",
@@ -159,6 +168,7 @@ class GatekeeperService:
         matched_alias = self._match_alias(text, all_names)
         if matched_alias:
             if self._is_direct_call(text, matched_alias):
+                await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
                 await self.store.record_bot_turn(group_id, reset=True)
                 return GatekeeperDecision(
                     action="direct_pass",
@@ -187,6 +197,28 @@ class GatekeeperService:
                 should_record_ambient=True,
             )
 
+        # Time-Decaying Per-User Attention Window (0-60s hot -> 60-240s linear decay)
+        attention_age = await self.store.get_user_attention_age_seconds(group_id, envelope.sender_qq)
+        if attention_age is not None and attention_age <= self.attention_decay_seconds:
+            # Explicit goodbye or replying to someone else clears attention immediately
+            if any(cue in text for cue in GOODBYE_CUES) or (envelope.reply_to_msg_id and not replied_to_bot):
+                await self.store.clear_user_attention(group_id, envelope.sender_qq)
+            else:
+                eff_threshold = self.compute_attention_threshold(attention_age)
+                # In hot window (<=60s) with no external gatekeeper LLM, allow smooth direct follow-up
+                base = 0.72 if attention_age <= self.attention_hot_seconds else 0.50
+                decision = await self._evaluate_soft_entry(
+                    envelope=envelope,
+                    target="bot" if attention_age <= self.attention_hot_seconds else "group_open",
+                    base_score=base,
+                    llm_scorer=llm_scorer,
+                    threshold_override=eff_threshold,
+                    attention_age_seconds=attention_age,
+                )
+                if decision.action in ("direct_pass", "soft_entry"):
+                    await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
+                return decision
+
         # Open group message -> evaluate soft-entry with strict air-guardrail
         return await self._evaluate_soft_entry(
             envelope=envelope,
@@ -195,12 +227,25 @@ class GatekeeperService:
             llm_scorer=llm_scorer,
         )
 
+    def compute_attention_threshold(self, age_seconds: float) -> float:
+        """0..60s -> 0.35 (hot); 60..240s -> linear decay from 0.35 back to soft_entry_threshold (0.78)."""
+        hot_floor = 0.35
+        if age_seconds <= self.attention_hot_seconds:
+            return hot_floor
+        if age_seconds >= self.attention_decay_seconds:
+            return self.soft_entry_threshold
+        span = max(1.0, self.attention_decay_seconds - self.attention_hot_seconds)
+        progress = (age_seconds - self.attention_hot_seconds) / span
+        return round(hot_floor + progress * (self.soft_entry_threshold - hot_floor), 3)
+
     async def _evaluate_soft_entry(
         self,
         envelope: MessageEnvelope,
         target: str,
         base_score: float,
         llm_scorer: Callable[[MessageEnvelope, str], Awaitable[dict[str, Any] | None]] | None = None,
+        threshold_override: float | None = None,
+        attention_age_seconds: float | None = None,
     ) -> GatekeeperDecision:
         group_id = envelope.group_id or 0
         consecutive_turns = await self.store.get_consecutive_bot_turns(group_id)
@@ -240,13 +285,14 @@ class GatekeeperService:
             except Exception:
                 pass  # Fall back cleanly to deterministic heuristic score
 
-        if score >= self.soft_entry_threshold:
+        eff_thr = threshold_override if threshold_override is not None else self.soft_entry_threshold
+        if score >= eff_thr:
             await self.store.record_bot_turn(group_id, reset=False)
             return GatekeeperDecision(
                 action="soft_entry",
                 target=target,  # type: ignore[arg-type]
                 score=round(score, 3),
-                reason=f"Soft-entry passed ({score:.2f} >= {self.soft_entry_threshold:.2f}): {reason}",
+                reason=f"Soft-entry passed ({score:.2f} >= {eff_thr:.2f}" + (f", attention={int(attention_age_seconds)}s" if attention_age_seconds is not None else "") + f"): {reason}",
                 should_record_ambient=True,
                 suggested_max_chars=60,  # Soft-entry stays brief & punchy
             )
@@ -255,7 +301,7 @@ class GatekeeperService:
             action="silent",
             target=target,  # type: ignore[arg-type]
             score=round(score, 3),
-            reason=f"Downweighted silent ({score:.2f} < {self.soft_entry_threshold:.2f}); recorded to ambient memory",
+            reason=f"Downweighted silent ({score:.2f} < {eff_thr:.2f}); recorded to ambient memory",
             should_record_ambient=True,
         )
 
@@ -279,7 +325,7 @@ class GatekeeperService:
         escaped = re.escape(alias)
         if re.match(rf"^{escaped}[\s,，、!！?？~～:：]", stripped):
             return not has_third_person_cue
-        if re.match(rf"^(喂|诶|哎|哈喽|hello|hi)?[\s,，]*{escaped}", stripped, re.IGNORECASE):
+        if re.match(rf"^[@＠]?(喂|诶|哎|哈喽|hello|hi)?[\s,，]*{escaped}", stripped, re.IGNORECASE):
             if has_third_person_cue:
                 return False
             return True
