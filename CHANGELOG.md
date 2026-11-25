@@ -1,3 +1,9 @@
+## v1.4.3 (2026-11-25)
+- **深色模式全面修复**：补齐 `color-scheme: dark`、`.btn.secondary`、`.provider-card`、`.modal-box`、`.seg-bar`、`.progress-track`、`.mobile-bottom-nav`、`tbody tr:hover`、`.toast` 与冷却提示框等深色样式。
+- **界面中文化**：将能力槽位、主备路由、接口协议、健康状态、全链路追踪阶段/状态、审核与更新状态等英文技术标识替换为中文名称。
+- **总消耗柱状统计**：新增 `/api/dashboard/overview` 的 `usage_series`（支持近 7 天按天与最近 24 小时按小时统计，按本地时区对齐）及仪表盘柱状图。
+- **品牌图标升级**：将侧边栏与登录页的「呆」字图标替换为 EchoSea 声波 SVG 图标。
+
 ## v1.4.2 (2026-11-25)
 - **修复表情包缩略图被裁剪显示不全**：将 `.sticker-thumb` 从 `display: grid` + 固定 `138px` 改为 `200px` Flex 居中容器 + `max-width/max-height: 100%` + `object-fit: contain`，完整展示表情包画面与上下配字，并同步适配深色模式卡片底色。
 
