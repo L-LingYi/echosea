@@ -1,5 +1,9 @@
 # 更新日志（Changelog）
 
+## v1.5.3 (2026-11-26)
+- **仪表盘今日指标本地零点对齐**：修复 `/api/dashboard/overview` 将 `start_of_today` 固定为 UTC 零点导致本地 `00:00–08:00` 时段「今日 Token 消耗」「语音合成字符」与 `today_spend_usd` 未在零点重置、与柱状图当天桶不一致的问题，统一按 `tz_offset_minutes` 对齐调用方本地零点。
+- **生产响应耗时剔除已核查样本**：支持通过 `SystemConfig`（`dashboard/latency`）配置 `excluded_usage_ids` 与 `excluded_alert_ids`，在计算平均耗时、`P95` 与慢响应告警数时排除历史异常样本并在仪表盘展示排除条数提示，同时保持 Token 总量与费用统计不变。
+
 ## v1.5.2 (2026-11-25)
 - **网页读取（`fetch_webpage`）逐跳重定向 SSRF 防护与独立开关**：
   - 将 `WebPerceptionService.fetch_webpage` 由 `follow_redirects=True` 改为禁用自动跳转并逐跳手动解析 `Location`（最多 5 跳），**每次跳转前均重新调用 `_is_public_http_url` 校验目标地址**，拦截跳转至 `127.0.0.1`、内网网段、云元数据地址或 `file://` 等非公网协议的 SSRF 绕过行为。

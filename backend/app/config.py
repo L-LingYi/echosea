@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "EchoSea（回声海）"
-    app_version: str = "1.5.2"
+    app_version: str = "1.5.3"
     environment: str = "production"
     log_level: str = "INFO"
 

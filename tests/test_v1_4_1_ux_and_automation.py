@@ -14,7 +14,7 @@ from app.main import create_app
 
 def test_v1_4_1_readme_version_and_frontend_dark_mode_and_guides():
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "v1.5.2" in readme
+    assert "v1.5.3" in readme
     assert "v1.3.3" not in readme
 
     settings = Settings(
@@ -29,7 +29,7 @@ def test_v1_4_1_readme_version_and_frontend_dark_mode_and_guides():
     app = create_app(settings_override=settings, force_memory_store=True)
 
     with TestClient(app) as client:
-        assert client.get("/healthz").json()["version"] == "1.5.2"
+        assert client.get("/healthz").json()["version"] == "1.5.3"
         html = client.get("/").text
         # Dark mode support
         assert 'data-theme="dark"' in html
