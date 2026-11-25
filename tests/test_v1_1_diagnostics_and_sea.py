@@ -1,12 +1,54 @@
 """v1.1 Diagnostics, Jev System One Gatekeeper, Consciousness Sea Graph & Benchmark Tests."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.dashboard import dashboard_overview
 from app.config import Settings
 from app.core.snowluma_adapter import SnowLumaAdapter
 from app.main import create_app
+from app.models.db import AlertEvent, SystemConfig, UsageMetric
+
+
+@pytest.mark.asyncio
+async def test_dashboard_excludes_reviewed_latency_without_changing_usage(db_session):
+    async def spend(session):
+        return 0.0
+
+    runtime = SimpleNamespace(
+        adapter=SimpleNamespace(status_snapshot=lambda: {}),
+        store=SimpleNamespace(backend_name="memory"),
+        plugin_manager=SimpleNamespace(list_loaded=lambda: []),
+        model_hub=SimpleNamespace(get_today_spend_usd=spend, daily_budget_usd=0),
+    )
+    normal = UsageMetric(slot="gatekeeper", provider_name="demo", model_name="model", ttft_ms=200, prompt_tokens=9)
+    slow = UsageMetric(slot="gatekeeper", provider_name="demo", model_name="model",
+                       ttft_ms=40000, prompt_tokens=100, estimated_cost_usd=0.01)
+    alert = AlertEvent(severity="warning", category="slow_response", title="Slow request", detail="")
+    db_session.add_all([normal, slow, alert])
+    await db_session.flush()
+
+    before = await dashboard_overview(days=7, tz_offset_minutes=480, session=db_session, runtime=runtime)
+    assert before["tokens"]["avg_ttft_ms"] == 20100
+    assert before["tokens"]["p95_ttft_ms"] == 40000
+    assert before["tokens"]["slow_response_alerts"] == 1
+
+    db_session.add(SystemConfig(scope_type="dashboard", scope_id="latency", config_json={
+        "excluded_usage_ids": [slow.id],
+        "excluded_alert_ids": [alert.id],
+    }))
+    await db_session.flush()
+    after = await dashboard_overview(days=7, tz_offset_minutes=480, session=db_session, runtime=runtime)
+    assert after["tokens"]["avg_ttft_ms"] == after["tokens"]["p95_ttft_ms"] == 200
+    assert after["tokens"]["slow_response_alerts"] == 0
+    assert after["tokens"]["latency_excluded_calls"] == 1
+    for field in ("prompt_tokens", "total_calls", "prompt_cache_hit_rate_pct"):
+        assert after["tokens"][field] == before["tokens"][field]
+    assert after["cost"] == before["cost"]
+    assert after["recent_alerts"] == before["recent_alerts"]
 
 
 def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousness_sea(monkeypatch):

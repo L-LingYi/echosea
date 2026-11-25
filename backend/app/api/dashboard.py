@@ -19,11 +19,18 @@ from app.models.db import (
     PipelineTrace,
     QQIdentity,
     StickerAsset,
+    SystemConfig,
     TTSDelivery,
     UsageMetric,
 )
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def _reviewed_ids(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if type(item) is int and item > 0]
 
 
 def _to_local(dt: datetime, tz_delta: timedelta) -> datetime:
@@ -142,6 +149,17 @@ async def dashboard_overview(
 ):
     now_utc = datetime.now(timezone.utc)
     since = now_utc - timedelta(days=days)
+    review = (
+        await session.execute(
+            select(SystemConfig.config_json).where(
+                SystemConfig.scope_type == "dashboard", SystemConfig.scope_id == "latency"
+            )
+        )
+    ).scalar_one_or_none()
+    review = review if isinstance(review, dict) else {}
+    excluded_usage_ids = _reviewed_ids(review.get("excluded_usage_ids"))
+    excluded_alert_ids = _reviewed_ids(review.get("excluded_alert_ids"))
+    latency_is_included = UsageMetric.id.not_in(excluded_usage_ids)
 
     # Strictly filter production traffic (exclude source='probe' so probes never skew TTFT/P95)
     u_stmt = select(
@@ -149,15 +167,23 @@ async def dashboard_overview(
         func.coalesce(func.sum(UsageMetric.cached_tokens), 0),
         func.coalesce(func.sum(UsageMetric.completion_tokens), 0),
         func.coalesce(func.sum(UsageMetric.estimated_cost_usd), 0.0),
-        func.coalesce(func.avg(UsageMetric.ttft_ms), 0.0),
+        func.coalesce(func.avg(UsageMetric.ttft_ms).filter(latency_is_included), 0.0),
         func.count(UsageMetric.id),
+        func.count(UsageMetric.id).filter(~latency_is_included),
     ).where(UsageMetric.created_at >= since, UsageMetric.source != "probe")
-    prompt_tok, cached_tok, comp_tok, total_cost, avg_ttft, total_calls = (await session.execute(u_stmt)).one()
+    prompt_tok, cached_tok, comp_tok, total_cost, avg_ttft, total_calls, excluded_calls = (
+        await session.execute(u_stmt)
+    ).one()
 
     # Compute P95 TTFT on production samples
     lat_stmt = (
         select(UsageMetric.ttft_ms)
-        .where(UsageMetric.created_at >= since, UsageMetric.source != "probe", UsageMetric.success.is_(True))
+        .where(
+            UsageMetric.created_at >= since,
+            UsageMetric.source != "probe",
+            UsageMetric.success.is_(True),
+            latency_is_included,
+        )
         .order_by(UsageMetric.ttft_ms.asc())
     )
     latencies = [int(x) for x in (await session.execute(lat_stmt)).scalars().all()]
@@ -292,7 +318,9 @@ async def dashboard_overview(
         (
             await session.execute(
                 select(func.count(AlertEvent.id)).where(
-                    AlertEvent.created_at >= since, AlertEvent.category == "slow_response"
+                    AlertEvent.created_at >= since,
+                    AlertEvent.category == "slow_response",
+                    AlertEvent.id.not_in(excluded_alert_ids),
                 )
             )
         ).scalar_one()
@@ -322,6 +350,7 @@ async def dashboard_overview(
             "avg_ttft_ms": round(float(avg_ttft), 1),
             "p95_ttft_ms": p95_ttft,
             "slow_response_alerts": slow_response_alerts,
+            "latency_excluded_calls": int(excluded_calls),
         },
         "cost": {
             "window_cost_usd": round(float(total_cost), 6),

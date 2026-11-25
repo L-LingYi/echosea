@@ -1001,6 +1001,7 @@ async function loadDashboard() {
     <div class="card kpi-card">
       <div class="kpi-top"><span class="kpi-label">生产响应耗时</span><span class="kpi-icon">⚡</span></div>
       <div class="kpi-val">${d.tokens.avg_ttft_ms}ms</div>
+      ${d.tokens.latency_excluded_calls ? `<div class="kpi-sub">已排除 ${Number(d.tokens.latency_excluded_calls)} 条历史耗时样本</div>` : ''}
       <div class="kpi-sub">P95 ${d.tokens.p95_ttft_ms}ms · 缓存 <strong>${d.tokens.prompt_cache_hit_rate_pct}%</strong> ${d.tokens.slow_response_alerts ? `<span class="badge warn">慢响应告警 ${d.tokens.slow_response_alerts}</span>` : ""}</div>
     </div>
     <div class="card kpi-card">
