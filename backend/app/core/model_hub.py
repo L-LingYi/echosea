@@ -6,11 +6,15 @@
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import func, select
@@ -155,6 +159,7 @@ class ModelHubService:
         max_tokens: int = 400,
         source: str = "production",
         request_id: str | None = None,
+        session_scope: str | None = None,
     ) -> ChatCompletionResult:
         """Invoke primary provider for slot; seamlessly failover to fallback provider on error."""
         stmt = (
@@ -174,7 +179,9 @@ class ModelHubService:
                 if self._http_caller is not None:
                     raw = await self._http_caller(provider, api_key, messages, temperature, max_tokens)
                 else:
-                    raw = await self._call_openai_compatible(provider, api_key, messages, temperature, max_tokens)
+                    raw = await self._call_openai_compatible(
+                        provider, api_key, messages, temperature, max_tokens, session_scope=session_scope
+                    )
 
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 usage = raw.get("usage", {})
@@ -265,6 +272,7 @@ class ModelHubService:
         state_text: str,
         default_target: str,
         request_id: str | None = None,
+        session_scope: str | None = None,
     ) -> dict[str, Any] | None:
         """Invoke configured 'gatekeeper' slot: natively supports TypeSafe AI Jev (`typesafe_systemone`)
         or standard `openai_compatible` fallback. Returns {'target': ..., 'score': ..., 'reason': ...} or None.
@@ -315,7 +323,9 @@ class ModelHubService:
                     if self._http_caller is not None:
                         raw = await self._http_caller(provider, api_key, messages, 0.1, 100)
                     else:
-                        raw = await self._call_openai_compatible(provider, api_key, messages, 0.1, 100)
+                        raw = await self._call_openai_compatible(
+                            provider, api_key, messages, 0.1, 100, session_scope=session_scope, gatekeeper_json=True
+                        )
                     txt = raw.get("choices", [{}])[0].get("message", {}).get("content", "{}")
                     parsed = _json.loads(txt)
                     p_tok = int((raw.get("usage") or {}).get("prompt_tokens", 0))
@@ -459,13 +469,16 @@ class ModelHubService:
                 detail=f"今日预估费用 ${spend:.4f} / 上限 ${self.daily_budget_usd:.2f}，请留意群聊活跃度与模型路由。",
             )
 
-    @staticmethod
     async def _call_openai_compatible(
+        self,
         provider: ModelProvider,
         api_key: str,
         messages: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
+        *,
+        session_scope: str | None = None,
+        gatekeeper_json: bool = False,
     ) -> dict[str, Any]:
         url = f"{provider.base_url.rstrip('/')}/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -477,6 +490,19 @@ class ModelHubService:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        endpoint = urlsplit(url)
+        if endpoint.scheme == "https" and endpoint.hostname == "opencode.ai" and endpoint.path.startswith(
+            ("/zen/go/", "/inference/go/")
+        ):
+            scope = session_scope or uuid.uuid4().hex
+            digest = hmac.new(self.master_key.encode(), f"{provider.slot}:{scope}".encode(), hashlib.sha256).hexdigest()
+            headers["x-opencode-session"] = f"ses_{digest[:32]}"
+            headers["User-Agent"] = "CompanionSystem/1.2"
+            if provider.slot == "gatekeeper" and provider.model_name == "deepseek-v4.1-flash":
+                payload["thinking"] = {"type": "disabled"}
+                payload["reasoning_effort"] = "none"
+                if gatekeeper_json:
+                    payload["response_format"] = {"type": "json_object"}
         async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()

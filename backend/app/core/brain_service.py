@@ -262,6 +262,9 @@ class CompanionPipeline:
         request_id: str | None = None,
     ) -> dict[str, Any]:
         request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
+        session_scope = (
+            f"group:{envelope.group_id}" if envelope.group_id is not None else f"private:{envelope.sender_qq}"
+        )
 
         # 1. Strong QQ Identity Binding
         await self.identity_service.upsert_from_message(
@@ -297,6 +300,7 @@ class CompanionPipeline:
                 state_text=state_text,
                 default_target=default_target,
                 request_id=request_id,
+                session_scope=session_scope,
             )
 
         decision = await self.gatekeeper.evaluate(
@@ -405,6 +409,7 @@ class CompanionPipeline:
                 max_tokens=300 if decision.action == "direct_pass" else 120,
                 source="production",
                 request_id=request_id,
+                session_scope=session_scope,
             )
             await self._trace(
                 session, request_id, envelope.scene, envelope.group_id, "main_brain", "ok",
