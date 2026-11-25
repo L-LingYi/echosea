@@ -32,7 +32,10 @@ def hamming_distance(hash_a: str, hash_b: str) -> int:
     """Return Hamming distance between two hex dHashes."""
     if not hash_a or not hash_b or len(hash_a) != len(hash_b):
         return 64
-    return (int(hash_a, 16) ^ int(hash_b, 16)).bit_count()
+    try:
+        return (int(hash_a, 16) ^ int(hash_b, 16)).bit_count()
+    except ValueError:
+        return 64
 
 
 def stitch_gif_3x3_grid(gif_bytes: bytes, tile_size: int = 160) -> tuple[bytes, int]:

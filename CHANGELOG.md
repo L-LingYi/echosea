@@ -1,5 +1,11 @@
 # 更新日志（Changelog）
 
+## v1.5.1 (2026-11-25)
+- **群聊话题连续性优化（防断聊）**：
+  - **单人注意力窗口渐进护栏**：保留 `max_consecutive_group_turns=4` 作为软收紧起点，在用户个人注意力窗口内从第 `4` 轮起每轮渐进抬高有效阈值（`+0.08/轮`，封顶 `0.90`）并继续交由门卫模型语义评估，放宽注意力窗口硬上限至 `max_attention_group_turns=8`，避免正常追问在第 4 轮后被一刀切静音。
+  - **群级话题余温窗口（Group Topic Warmth）**：新增 `group_bot_active:{group_id}` 追踪与 `group_topic_warmth_seconds=180.0` / `group_topic_warmth_floor=0.65` 配置，Bot 回复后 3 分钟内其他群友顺着话题接梗时享有渐进式阈值折让，并向门卫模型注入 `[Recent Group Bot Topic]` 上下文提示。
+  - **可观测性与表情包哈希修复**：`pipeline_traces` 的 `gatekeeper` 阶段记录脱敏后的 `reason_code`；修复 `hamming_distance` 在比较 `url_` / `manual_` 前缀等长哈希时抛出 `ValueError` 导致 `auto_sticker_reaction` 插件报错的问题。
+
 ## v1.5.0 (2026-11-25)
 - **大模型自主联网搜索与独立会话异步转述**：
   - `ModelHubService` 新增 OpenAI 兼容 `tools` / `tool_choice` 与 `tool_calls` 解析支持（兼容 OpenCode Go `deepseek-v4.1-flash` 与 `x-opencode-session` 会话隔离，不支持 `tools` 的接口自动降级重试）。

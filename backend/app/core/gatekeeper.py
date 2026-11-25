@@ -66,12 +66,18 @@ class GatekeeperService:
         max_consecutive_turns: int = 4,
         attention_hot_seconds: float = 60.0,
         attention_decay_seconds: float = 240.0,
+        max_attention_turns: int | None = None,
+        group_topic_warmth_seconds: float = 180.0,
+        group_topic_warmth_floor: float = 0.65,
     ) -> None:
         self.store = store
         self.soft_entry_threshold = soft_entry_threshold
         self.max_consecutive_turns = max_consecutive_turns
         self.attention_hot_seconds = attention_hot_seconds
         self.attention_decay_seconds = attention_decay_seconds
+        self.max_attention_turns = max_attention_turns if max_attention_turns is not None else max(max_consecutive_turns * 2, 8)
+        self.group_topic_warmth_seconds = group_topic_warmth_seconds
+        self.group_topic_warmth_floor = group_topic_warmth_floor
 
     async def evaluate(
         self,
@@ -136,6 +142,7 @@ class GatekeeperService:
         # Explicit @bot or accurate reply-to-bot -> High-priority direct pass
         if bot_mentioned or replied_to_bot:
             await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
+            await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
             await self.store.record_bot_turn(group_id, reset=True)
             return GatekeeperDecision(
                 action="direct_pass",
@@ -169,6 +176,7 @@ class GatekeeperService:
         if matched_alias:
             if self._is_direct_call(text, matched_alias):
                 await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
+                await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
                 await self.store.record_bot_turn(group_id, reset=True)
                 return GatekeeperDecision(
                     action="direct_pass",
@@ -214,10 +222,20 @@ class GatekeeperService:
                     llm_scorer=llm_scorer,
                     threshold_override=eff_threshold,
                     attention_age_seconds=attention_age,
+                    in_attention_window=True,
                 )
                 if decision.action in ("direct_pass", "soft_entry"):
                     await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
                 return decision
+
+        # Group-level topic warmth window: when bot recently spoke in group, let other members riff on the topic
+        group_warmth_age: float | None = None
+        warmth_threshold: float | None = None
+        if not (envelope.reply_to_msg_id and not replied_to_bot):
+            raw_group_age = await self.store.get_group_bot_activity_age_seconds(group_id)
+            if raw_group_age is not None and raw_group_age <= self.group_topic_warmth_seconds:
+                group_warmth_age = raw_group_age
+                warmth_threshold = self.compute_group_warmth_threshold(raw_group_age)
 
         # Open group message -> evaluate soft-entry with strict air-guardrail
         return await self._evaluate_soft_entry(
@@ -225,6 +243,8 @@ class GatekeeperService:
             target="group_open",
             base_score=0.35,
             llm_scorer=llm_scorer,
+            threshold_override=warmth_threshold,
+            group_warmth_age_seconds=group_warmth_age,
         )
 
     def compute_attention_threshold(self, age_seconds: float) -> float:
@@ -238,6 +258,16 @@ class GatekeeperService:
         progress = (age_seconds - self.attention_hot_seconds) / span
         return round(hot_floor + progress * (self.soft_entry_threshold - hot_floor), 3)
 
+    def compute_group_warmth_threshold(self, age_seconds: float) -> float:
+        """0..group_topic_warmth_seconds -> linear decay from warmth_floor (0.65) back to soft_entry_threshold (0.78)."""
+        if age_seconds <= 0.0:
+            return self.group_topic_warmth_floor
+        if age_seconds >= self.group_topic_warmth_seconds:
+            return self.soft_entry_threshold
+        span = max(1.0, self.group_topic_warmth_seconds)
+        progress = age_seconds / span
+        return round(self.group_topic_warmth_floor + progress * (self.soft_entry_threshold - self.group_topic_warmth_floor), 3)
+
     async def _evaluate_soft_entry(
         self,
         envelope: MessageEnvelope,
@@ -246,15 +276,18 @@ class GatekeeperService:
         llm_scorer: Callable[[MessageEnvelope, str], Awaitable[dict[str, Any] | None]] | None = None,
         threshold_override: float | None = None,
         attention_age_seconds: float | None = None,
+        in_attention_window: bool = False,
+        group_warmth_age_seconds: float | None = None,
     ) -> GatekeeperDecision:
         group_id = envelope.group_id or 0
         consecutive_turns = await self.store.get_consecutive_bot_turns(group_id)
-        if consecutive_turns >= self.max_consecutive_turns:
+        turn_cap = self.max_attention_turns if in_attention_window else self.max_consecutive_turns
+        if consecutive_turns >= turn_cap:
             return GatekeeperDecision(
                 action="silent",
                 target=target,  # type: ignore[arg-type]
                 score=0.1,
-                reason=f"Air guardrail: reached max consecutive turns ({self.max_consecutive_turns})",
+                reason=f"Air guardrail: reached max {'attention ' if in_attention_window else ''}consecutive turns ({turn_cap})",
                 should_record_ambient=True,
             )
 
@@ -286,13 +319,28 @@ class GatekeeperService:
                 pass  # Fall back cleanly to deterministic heuristic score
 
         eff_thr = threshold_override if threshold_override is not None else self.soft_entry_threshold
+        if in_attention_window and consecutive_turns >= self.max_consecutive_turns:
+            # Progressive tightening instead of hard cutoff: filters weak filler while keeping clear follow-ups alive
+            extra_turns = consecutive_turns - self.max_consecutive_turns + 1
+            eff_thr = min(0.90, round(eff_thr + 0.08 * extra_turns, 3))
+
+        tags: list[str] = []
+        if attention_age_seconds is not None:
+            tags.append(f"attention={int(attention_age_seconds)}s")
+        if group_warmth_age_seconds is not None:
+            tags.append(f"warmth={int(group_warmth_age_seconds)}s")
+        if in_attention_window and consecutive_turns >= self.max_consecutive_turns:
+            tags.append(f"turn={consecutive_turns}")
+        tag_suffix = f", {', '.join(tags)}" if tags else ""
+
         if score >= eff_thr:
             await self.store.record_bot_turn(group_id, reset=False)
+            await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
             return GatekeeperDecision(
                 action="soft_entry",
                 target=target,  # type: ignore[arg-type]
                 score=round(score, 3),
-                reason=f"Soft-entry passed ({score:.2f} >= {eff_thr:.2f}" + (f", attention={int(attention_age_seconds)}s" if attention_age_seconds is not None else "") + f"): {reason}",
+                reason=f"Soft-entry passed ({score:.2f} >= {eff_thr:.2f}{tag_suffix}): {reason}",
                 should_record_ambient=True,
                 suggested_max_chars=60,  # Soft-entry stays brief & punchy
             )
@@ -301,7 +349,7 @@ class GatekeeperService:
             action="silent",
             target=target,  # type: ignore[arg-type]
             score=round(score, 3),
-            reason=f"Downweighted silent ({score:.2f} < {eff_thr:.2f}); recorded to ambient memory",
+            reason=f"Downweighted silent ({score:.2f} < {eff_thr:.2f}{tag_suffix}); recorded to ambient memory",
             should_record_ambient=True,
         )
 

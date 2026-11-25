@@ -378,6 +378,13 @@ class CompanionPipeline:
             att_age = await self.store.get_user_attention_age_seconds(env.group_id or 0, env.sender_qq) if env.scene == 'group' else None
             if att_age is not None:
                 state_text += f"\n[Active Attention Window] Bot replied to this user {int(att_age)}s ago; prefer continuing conversation unless clearly talking to someone else."
+            elif env.scene == "group" and env.group_id is not None:
+                group_bot_age = await self.store.get_group_bot_activity_age_seconds(env.group_id)
+                if group_bot_age is not None and group_bot_age <= self.gatekeeper.group_topic_warmth_seconds:
+                    state_text += (
+                        f"\n[Recent Group Bot Topic] Bot replied in this group {int(group_bot_age)}s ago; "
+                        "if this message riffs on or continues the bot's topic (and is not directed at another member), a brief chime-in is natural."
+                    )
             return await self.model_hub.evaluate_gatekeeper_slot(
                 session=session,
                 state_text=state_text,
@@ -401,7 +408,12 @@ class CompanionPipeline:
         await self._trace(
             session, request_id, envelope.scene, envelope.group_id, "gatekeeper", decision.action,
             latency_ms=gk_ms,
-            meta={"target": decision.target, "score": decision.score, "slow": gk_slow},
+            meta={
+                "target": decision.target,
+                "score": decision.score,
+                "slow": gk_slow,
+                "reason_code": self._gatekeeper_reason_code(decision),
+            },
         )
         if gk_slow:
             await self.model_hub.alert_service.notify(
@@ -699,6 +711,11 @@ class CompanionPipeline:
                 )
             )
             await session.flush()
+            if envelope.scene == "group" and envelope.group_id is not None:
+                await self.store.record_group_bot_activity(
+                    envelope.group_id,
+                    ttl_seconds=max(180, int(self.gatekeeper.group_topic_warmth_seconds) + 30),
+                )
 
         await self.event_bus.emit(
             "on_reply_sent",
@@ -851,6 +868,36 @@ class CompanionPipeline:
         )
         return current, queries
 
+
+    @staticmethod
+    def _gatekeeper_reason_code(decision: GatekeeperDecision) -> str:
+        """Map GatekeeperDecision reason into a privacy-safe diagnostic code (zero raw chat text)."""
+        r = decision.reason or ""
+        if "recalled" in r:
+            return "recalled"
+        if "Daily budget circuit breaker" in r:
+            return "budget_fuse"
+        if "Budget fuse active" in r:
+            return "budget_admin_override"
+        if "Explicit @mention" in r:
+            return "explicit_at_or_reply"
+        if "Direct alias call" in r:
+            return "direct_alias"
+        if "Hard rule: message explicitly @mentions" in r:
+            return "other_user_mention"
+        if "Active peer-to-peer" in r:
+            return "active_peer_thread"
+        if "Air guardrail" in r:
+            return "air_guardrail_attention" if "attention" in r else "air_guardrail"
+        if "Private DM" in r:
+            return "private_dm"
+        if "attention=" in r:
+            return "attention_passed" if decision.action == "soft_entry" else "attention_filtered"
+        if "warmth=" in r:
+            return "group_warmth_passed" if decision.action == "soft_entry" else "group_warmth_filtered"
+        if decision.target == "other_user":
+            return "llm_other_user"
+        return "soft_entry_passed" if decision.action == "soft_entry" else "threshold_filtered"
 
     async def count_newer_group_messages(
         self,

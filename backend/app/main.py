@@ -96,6 +96,9 @@ def create_app(
             max_consecutive_turns=settings.max_consecutive_group_turns,
             attention_hot_seconds=settings.attention_hot_seconds,
             attention_decay_seconds=settings.attention_decay_seconds,
+            max_attention_turns=settings.max_attention_group_turns,
+            group_topic_warmth_seconds=settings.group_topic_warmth_seconds,
+            group_topic_warmth_floor=settings.group_topic_warmth_floor,
         )
         memory_service = MemoryService(dm_bridge_window_minutes=settings.dm_bridge_window_minutes)
         model_hub = ModelHubService(

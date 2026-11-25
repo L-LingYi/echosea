@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "EchoSea（回声海）"
-    app_version: str = "1.5.0"
+    app_version: str = "1.5.1"
     environment: str = "production"
     log_level: str = "INFO"
 
@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     # Runtime Guardrails
     debounce_window_seconds: float = 2.5
     max_consecutive_group_turns: int = 4
+    max_attention_group_turns: int = 8        # Higher cap when user is inside active attention window (soft tightening starts at max_consecutive_group_turns)
     group_rate_limit_per_minute: int = 12
     global_rate_limit_per_minute: int = 40
     daily_budget_usd: float = 0.0
@@ -53,6 +54,8 @@ class Settings(BaseSettings):
     stale_soft_entry_min_msgs: int = 5
     attention_hot_seconds: float = 60.0       # 0-60s: hot follow-up window after strong wake-up
     attention_decay_seconds: float = 240.0    # 60-240s (4 min): linear attention decay back to normal threshold
+    group_topic_warmth_seconds: float = 180.0 # 0-180s (3 min): group-level topic warmth after bot speaks so other members riffing on bot's topic don't drop
+    group_topic_warmth_floor: float = 0.65    # Starting threshold right after bot speaks (decays linearly back to soft_entry_threshold)
     smart_quote_min_intervening: int = 3      # Quote only when >=3 newer group msgs pushed target up
     smart_quote_min_delay_seconds: float = 25.0  # Or when generation took >=25s
     ambient_summary_trigger_count: int = 20

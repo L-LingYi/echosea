@@ -133,6 +133,20 @@ class StateStore:
             return max(0.0, time.time() - float(data["ts"]))
         return None
 
+    async def record_group_bot_activity(self, group_id: int, ttl_seconds: int = 210) -> None:
+        """Refresh group-wide recent bot reply timestamp for multi-user topic continuity."""
+        await self.set_json(
+            f"group_bot_active:{group_id}",
+            {"ts": time.time()},
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def get_group_bot_activity_age_seconds(self, group_id: int) -> float | None:
+        data = await self.get_json(f"group_bot_active:{group_id}")
+        if data and isinstance(data, dict) and "ts" in data:
+            return max(0.0, time.time() - float(data["ts"]))
+        return None
+
     async def record_bot_turn(self, group_id: int, reset: bool = False) -> int:
         key = f"bot_turns:{group_id}"
         if reset:
