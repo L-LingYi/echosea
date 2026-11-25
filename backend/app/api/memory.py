@@ -191,7 +191,7 @@ async def consciousness_sea_graph(
     """Consciousness Sea (意识海): Multi-layer Memory Knowledge Graph for interactive WebUI visualization.
 
     Returns nodes & edges connecting:
-    - L5 Self Core (小呆呆自我意识)
+    - L5 Self Core (EchoSea 自我意识)
     - Group Worlds (群聊域)
     - L4 QQ Identities (熟人卡 + 亲密度 + 公开/私密画像)
     - L2 Ambient Summaries (边缘旁听摘要)
@@ -215,7 +215,7 @@ async def consciousness_sea_graph(
     life = (await session.execute(select(SelfLifeState).order_by(SelfLifeState.recorded_at.desc()).limit(1))).scalar_one_or_none()
     _add_node(
         "self_core",
-        "小呆呆 · 意识核心",
+        "EchoSea · 意识核心",
         "L5_self",
         size=28,
         summary=f"精力 {life.energy_level if life else 80} · 心情 {life.mood if life else 'relaxed'} · {life.current_activity if life else '摸鱼看群'}",
