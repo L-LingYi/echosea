@@ -7,6 +7,7 @@ Requires=docker.service
 Type=simple
 WorkingDirectory=/var/lib/companion-updater
 EnvironmentFile=/etc/companion-updater.env
+Environment=DOCKER_CONFIG=/var/lib/companion-updater/docker-config
 ExecStart=/usr/bin/python3 /usr/local/libexec/companion-updater/host_updater.py
 StateDirectory=companion-updater
 StateDirectoryMode=0700
