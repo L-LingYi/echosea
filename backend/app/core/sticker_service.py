@@ -253,16 +253,15 @@ class StickerService:
         limit: int = 80,
         fetcher=None,
     ) -> dict[str, Any]:
-        """Download and import tagged stickers on demand from a public dataset preset or custom JSON/JSONL URL."""
-        import json as _json
+        """Import tagged stickers from a user-supplied JSON/JSONL URL (or fetcher in tests)."""
         import httpx as _httpx
 
-        preset = next((p for p in PUBLIC_STICKER_PRESETS if p["id"] == preset_id), None) if preset_id else None
-        target_url = (custom_url or (preset["default_data_url"] if preset else "")).strip()
+        target_url = (custom_url or "").strip()
+        if not target_url and fetcher is None:
+            raise ValueError("请先前往推荐仓库自行下载数据集文件后通过本地上传导入，或填写可直接访问的 JSON/JSONL 地址")
         if not target_url:
-            raise ValueError("请指定有效的预设源或自定义 JSON/JSONL 数据地址")
+            target_url = f"preset://{preset_id or 'custom'}"
 
-        limit = max(1, min(500, int(limit or 80)))
         if fetcher is not None:
             raw_text = await fetcher(target_url)
         else:
@@ -270,6 +269,26 @@ class StickerService:
                 resp = await client.get(target_url, headers={"User-Agent": "EchoSea-StickerImporter/1.4"})
                 resp.raise_for_status()
                 raw_text = resp.text
+        return await self.import_from_raw_text(
+            session=session,
+            raw_text=raw_text,
+            limit=limit,
+            source_label=preset_id or "custom_url",
+        )
+
+    async def import_from_raw_text(
+        self,
+        session: AsyncSession,
+        raw_text: str,
+        limit: int = 80,
+        source_label: str = "local_upload",
+    ) -> dict[str, Any]:
+        """Parse local uploaded JSON/JSONL sticker dataset text, auto-extract tags, deduplicate, and import."""
+        import json as _json
+
+        limit = max(1, min(500, int(limit or 80)))
+        preset = None
+        preset_id = source_label
 
         # Parse standard JSON (array or wrapped object) first; fall back to multi-line JSONL on JSONDecodeError
         records: list[dict[str, Any]] = []
@@ -344,24 +363,21 @@ PUBLIC_STICKER_PRESETS: list[dict[str, Any]] = [
         "id": "emo_visual_data",
         "name": "Emo Visual Data（GLM-4V 标注中文表情包）",
         "repo_url": "https://github.com/LLM-Red-Team/emo-visual-data",
-        "default_data_url": "https://raw.githubusercontent.com/LLM-Red-Team/emo-visual-data/main/data.json",
         "description": "18,000+ 张中文表情包视觉标注数据，自带画面与情绪语义说明，最适合 AI 按语境检索斗图。",
-        "recommended_limit": 80,
+        "format_hint": "前往仓库下载 JSON/JSONL 数据文件后，在下方上传导入",
     },
     {
         "id": "chinese_meme_desc",
         "name": "Chinese Meme Description（中文表情包图文描述库）",
         "repo_url": "https://github.com/reilxlx/chinese-meme-description-dataset",
-        "default_data_url": "https://huggingface.co/datasets/REILX/chinese-meme-description-dataset/raw/main/train.jsonl",
         "description": "高质量中文表情包图文描述集，含画面神态、配字与情绪语境，适合冷启动语义匹配。",
-        "recommended_limit": 80,
+        "format_hint": "可在 Hugging Face / GitHub 下载数据集 JSONL 后上传导入",
     },
     {
         "id": "chinese_bqb",
         "name": "ChineseBQB（GitHub 经典中文表情包合集）",
         "repo_url": "https://github.com/zhaoolee/ChineseBQB",
-        "default_data_url": "https://raw.githubusercontent.com/zhaoolee/ChineseBQB/master/chinesebqb_github.json",
         "description": "按主题分类的经典中文表情包合集，适合作为群聊冷启动图库，导入后可配合 AI 自动补全语境标签。",
-        "recommended_limit": 100,
+        "format_hint": "下载仓库索引 JSON 或挑选图片 URL 列表后在下方导入",
     },
 ]

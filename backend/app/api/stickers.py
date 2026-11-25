@@ -150,3 +150,25 @@ async def import_sticker_preset(
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"拉取预设表情包失败：{exc}")
+
+
+@router.post("/presets/upload")
+async def upload_sticker_dataset(
+    body: dict[str, Any],
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    """Import stickers from a user-downloaded local JSON / JSONL file."""
+    content = str(body.get("content") or "")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="上传文件内容为空")
+    try:
+        return await runtime.sticker_service.import_from_raw_text(
+            session=session,
+            raw_text=content,
+            limit=int(body.get("limit", 80)),
+            source_label=str(body.get("filename") or "local_upload"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"解析上传的表情包文件失败：{exc}")

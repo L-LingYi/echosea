@@ -69,6 +69,8 @@ class BackupService:
                 "remote_path": "/EchoSea/backups",
                 "retention_count": 14,
                 "auto_enabled": False,
+                "schedule_interval_hours": 24,
+                "last_auto_backup_at": None,
                 "aliyun_client_id": "",
                 "aliyun_client_secret_enc": "",
                 "aliyun_refresh_token_enc": "",
@@ -90,6 +92,8 @@ class BackupService:
             "remote_path": raw.get("remote_path", "/EchoSea/backups"),
             "retention_count": int(raw.get("retention_count", 14)),
             "auto_enabled": bool(raw.get("auto_enabled", False)),
+            "schedule_interval_hours": int(raw.get("schedule_interval_hours", 24)),
+            "last_auto_backup_at": raw.get("last_auto_backup_at"),
             "aliyun_client_id": raw.get("aliyun_client_id", ""),
             "aliyun_client_secret_masked": mask_secret(cs_plain) if cs_plain else "",
             "aliyun_refresh_token_masked": mask_secret(rt_plain) if rt_plain else "",
@@ -109,6 +113,8 @@ class BackupService:
             "remote_path",
             "retention_count",
             "auto_enabled",
+            "schedule_interval_hours",
+            "last_auto_backup_at",
             "aliyun_client_id",
             "aliyun_drive_type",
             "aliyun_oauth_proxy_url",
@@ -121,6 +127,10 @@ class BackupService:
                     val = "/" + str(val).strip().strip("/") if str(val).strip() else "/EchoSea/backups"
                 elif key == "webdav_url":
                     val = str(val).strip().rstrip("/")
+                elif key == "schedule_interval_hours":
+                    val = max(1, min(168, int(val)))
+                elif key == "retention_count":
+                    val = max(1, min(90, int(val)))
                 current[key] = val
 
         # Encrypt sensitive secrets only when non-empty (blank preserves existing secret)
@@ -486,4 +496,53 @@ class BackupService:
         )
         session.add(rec)
         await session.flush()
+        return rec
+
+    def cleanup_old_local_backups(self, retention_count: int = 14) -> int:
+        """Keep only the newest `retention_count` local snapshot files."""
+        if not self.local_backup_dir.exists():
+            return 0
+        files = sorted(
+            self.local_backup_dir.glob("echosea_backup_*.json.gz"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        removed = 0
+        for stale in files[max(1, int(retention_count)):]:
+            try:
+                stale.unlink()
+                removed += 1
+            except Exception:
+                pass
+        return removed
+
+    async def run_scheduled_if_due(self, session: AsyncSession, alert_service=None) -> BackupRecord | None:
+        """Execute an automatic backup when auto_enabled is True and the configured interval has elapsed."""
+        raw = await self._get_raw_config(session)
+        if not raw.get("auto_enabled"):
+            return None
+        interval_hours = max(1, int(raw.get("schedule_interval_hours", 24)))
+        now = datetime.now(timezone.utc)
+        last_str = raw.get("last_auto_backup_at")
+        if last_str:
+            try:
+                last_dt = datetime.fromisoformat(str(last_str))
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if (now - last_dt).total_seconds() < interval_hours * 3600:
+                    return None
+            except Exception:
+                pass
+
+        rec = await self.run_backup(session)
+        self.cleanup_old_local_backups(int(raw.get("retention_count", 14)))
+        await self.save_config(session, {"last_auto_backup_at": now.isoformat()})
+        if rec.status == "failed" and alert_service is not None:
+            await alert_service.notify(
+                session,
+                severity="critical",
+                category="backup_failure",
+                title=f"定时异地备份失败：{rec.filename}",
+                detail=f"目标：{rec.remote_target}，原因：{rec.error_message or '未知错误'}",
+            )
         return rec

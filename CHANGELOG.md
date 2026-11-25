@@ -1,3 +1,12 @@
+## v1.4.2 (2026-11-25)
+- **修复表情包缩略图被裁剪显示不全**：将 `.sticker-thumb` 从 `display: grid` + 固定 `138px` 改为 `200px` Flex 居中容器 + `max-width/max-height: 100%` + `object-fit: contain`，完整展示表情包画面与上下配字，并同步适配深色模式卡片底色。
+
+## v1.4.1 (2026-11-25)
+- **深色模式（Dark Mode）**：新增完整深色主题 CSS 变量与侧边栏一键切换按钮，支持自动跟随系统主题并持久化至本地。
+- **表情包图库改为推荐外链 + 本地文件导入**：移除易 404 的远程直连下载按钮，改为展示公开图库推荐链接与本地 `.json`/`.jsonl` 文件上传导入（`POST /api/stickers/presets/upload`）。
+- **阿里云盘备份自动化与配置向导**：新增后台定时自动备份调度器（支持按每 6h/12h/24h/72h 自动备份、自动清理旧本地快照与失败告警），并在 WebUI 中加入分步接入引导（WebDAV/AList 与 OpenAPI 双模式指引）。
+- **文档修复**：同步更新 `README.md` 标题与版本号至 `v1.4.1`。
+
 ## v1.4.0 (2026-11-25) — EchoSea（回声海）公开版升级
 - **品牌更名**：正式更名为 **EchoSea（回声海）**（保留底层数据库与环境变量向后兼容，升级无痛）。
 - **公开表情包预设库（WebUI 按需拉取）**：新增 `GET /api/stickers/presets` 与 `POST /api/stickers/presets/import`，在「表情包图库」内置 `emo-visual-data`、`chinese-meme-description-dataset`、`ChineseBQB` 与自定义 JSON/JSONL 源一键按需拉取（自动去重与标签写入，不撑爆 Git 仓库）。

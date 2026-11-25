@@ -205,9 +205,26 @@ def create_app(
 
             forward_task = asyncio.create_task(adapter.run_forward_ws_loop(_on_forward_event, stop_event))
 
+        async def _backup_scheduler_loop() -> None:
+            while not app.state.shutting_down:
+                try:
+                    await asyncio.sleep(600)
+                    if app.state.shutting_down:
+                        break
+                    async with db_mgr.session_factory() as s:
+                        await backup_service.run_scheduled_if_due(s, alert_service=alert_service)
+                        await s.commit()
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logger.warning("Automated backup scheduler tick failed: %s", exc)
+
+        backup_task = asyncio.create_task(_backup_scheduler_loop())
+
         yield
 
         app.state.shutting_down = True
+        backup_task.cancel()
         stop_event.set()
         if forward_task is not None:
             forward_task.cancel()
