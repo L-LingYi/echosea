@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "Companion System"
-    app_version: str = "1.3.5"
+    app_version: str = "1.3.6"
     environment: str = "production"
     log_level: str = "INFO"
 

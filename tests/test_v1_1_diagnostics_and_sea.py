@@ -119,6 +119,10 @@ def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousne
         assert res_v["handled"] == "voice_answer"
         assert res_v["tts"]["synthesis_status"] == "synthesized"
         assert res_v["tts"]["onebot_status"] == "accepted"
+        dash_after_tts = client.get("/api/dashboard/overview?days=7", headers=headers).json()
+        assert dash_after_tts["tts"]["today_chars"] > 0
+        assert dash_after_tts["tts"]["total_chars"] == dash_after_tts["tts"]["today_chars"]
+        assert any(s["slot"] == "tts" and s.get("unit") == "chars" and s["chars"] > 0 for s in dash_after_tts["by_slot"])
 
         # 6. Verify unified request_id traces & zero raw chat text leaked into traces
         traces = client.get(f"/api/dashboard/traces?request_id={res_v['request_id']}", headers=headers).json()

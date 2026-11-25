@@ -132,6 +132,41 @@ async def dashboard_overview(
         ).scalar_one()
         or 0
     )
+    # TTS usage measured in synthesized Unicode character count (no DB migration needed)
+    tts_chars_window = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(func.length(TTSDelivery.cleaned_text)), 0)).where(
+                    TTSDelivery.created_at >= since, TTSDelivery.synthesis_status == "synthesized"
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    tts_chars_today = int(
+        (
+            await session.execute(
+                select(func.coalesce(func.sum(func.length(TTSDelivery.cleaned_text)), 0)).where(
+                    TTSDelivery.created_at >= start_of_today, TTSDelivery.synthesis_status == "synthesized"
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    if tts_synthesized > 0 or tts_total > 0:
+        by_slot.append(
+            {
+                "slot": "tts",
+                "unit": "chars",
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cached_tokens": 0,
+                "tokens": 0,
+                "chars": tts_chars_window,
+                "calls": tts_synthesized,
+            }
+        )
+
     # Preserve original synthesis success rate metric & expose independent OneBot acceptance rate
     tts_success_rate = round((tts_synthesized / tts_total) * 100, 2) if tts_total else 100.0
     tts_accept_rate = round((tts_onebot_accepted / tts_total) * 100, 2) if tts_total else None
@@ -186,6 +221,9 @@ async def dashboard_overview(
             "budget_fuse_active": today_spend >= budget_limit if budget_limit > 0 else False,
         },
         "tts": {
+            "today_chars": tts_chars_today,
+            "total_chars": tts_chars_window,
+            "synthesized_chars": tts_chars_window,
             "total_attempts": tts_total,
             "synthesized_count": tts_synthesized,
             "onebot_submitted_count": tts_onebot_submitted,

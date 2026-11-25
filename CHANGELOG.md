@@ -1,3 +1,6 @@
+## v1.3.6 (2026-11-25)
+- **TTS Character-Count Usage Tracking**: Added `today_chars` and `total_chars` (Unicode character count of `cleaned_text` for synthesized TTS deliveries) to `/api/dashboard/overview` and `by_slot` (`unit: "chars"`), and updated the WebUI Dashboard TTS KPI card and slot breakdown table to report voice synthesis consumption in characters.
+
 ## v1.3.5 (2026-11-25)
 - **Token-Only Usage Tracking**: Removed dollar/money cost & budget displays from Dashboard KPIs, slot tables, and Provider editor modal; Dashboard now focuses purely on Today's Token Consumption, 7-Day Total Tokens, Input/Output/Cached Token breakdown, and Prompt Cache hit rate (`daily_budget_usd` defaults to `0.0` / disabled).
 
