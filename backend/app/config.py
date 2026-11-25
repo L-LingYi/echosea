@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "Companion System"
-    app_version: str = "1.3.3"
+    app_version: str = "1.3.5"
     environment: str = "production"
     log_level: str = "INFO"
 
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     max_consecutive_group_turns: int = 4
     group_rate_limit_per_minute: int = 12
     global_rate_limit_per_minute: int = 40
-    daily_budget_usd: float = 5.0
+    daily_budget_usd: float = 0.0
     budget_alert_ratio: float = 0.8
     soft_entry_threshold: float = 0.78
     ideal_gatekeeper_ms: int = 5000           # Soft SLA: warn on dashboard if gatekeeper exceeds this (never drops)

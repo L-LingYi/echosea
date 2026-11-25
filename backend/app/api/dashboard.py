@@ -57,18 +57,34 @@ async def dashboard_overview(
 
     cache_hit_rate = round((cached_tok / prompt_tok) * 100, 2) if prompt_tok else 0.0
 
+    start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_tok_stmt = select(
+        func.coalesce(func.sum(UsageMetric.prompt_tokens), 0),
+        func.coalesce(func.sum(UsageMetric.completion_tokens), 0),
+        func.coalesce(func.sum(UsageMetric.cached_tokens), 0),
+    ).where(UsageMetric.created_at >= start_of_today, UsageMetric.source != "probe")
+    today_prompt_tok, today_comp_tok, today_cached_tok = (await session.execute(today_tok_stmt)).one()
+
     slot_stmt = (
         select(
             UsageMetric.slot,
-            func.coalesce(func.sum(UsageMetric.prompt_tokens + UsageMetric.completion_tokens), 0),
-            func.coalesce(func.sum(UsageMetric.estimated_cost_usd), 0.0),
+            func.coalesce(func.sum(UsageMetric.prompt_tokens), 0),
+            func.coalesce(func.sum(UsageMetric.completion_tokens), 0),
+            func.coalesce(func.sum(UsageMetric.cached_tokens), 0),
             func.count(UsageMetric.id),
         )
         .where(UsageMetric.created_at >= since, UsageMetric.source != "probe")
         .group_by(UsageMetric.slot)
     )
     by_slot = [
-        {"slot": r[0], "tokens": int(r[1]), "cost_usd": round(float(r[2]), 6), "calls": int(r[3])}
+        {
+            "slot": r[0],
+            "prompt_tokens": int(r[1]),
+            "completion_tokens": int(r[2]),
+            "cached_tokens": int(r[3]),
+            "tokens": int(r[1]) + int(r[2]),
+            "calls": int(r[4]),
+        }
         for r in (await session.execute(slot_stmt)).all()
     ]
 
@@ -149,9 +165,14 @@ async def dashboard_overview(
     return {
         "window_days": days,
         "tokens": {
+            "today_prompt_tokens": int(today_prompt_tok),
+            "today_completion_tokens": int(today_comp_tok),
+            "today_cached_tokens": int(today_cached_tok),
+            "today_total_tokens": int(today_prompt_tok) + int(today_comp_tok),
             "prompt_tokens": int(prompt_tok),
             "cached_tokens": int(cached_tok),
             "completion_tokens": int(comp_tok),
+            "total_tokens": int(prompt_tok) + int(comp_tok),
             "prompt_cache_hit_rate_pct": cache_hit_rate,
             "total_calls": int(total_calls),
             "avg_ttft_ms": round(float(avg_ttft), 1),

@@ -77,6 +77,24 @@ async def test_provider(
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.post("/{provider_id}/reset-cooldown")
+async def reset_provider_cooldown(
+    provider_id: int,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    """Manually clear an active failover cooldown so primary traffic resumes immediately."""
+    provider = await session.get(ModelProvider, provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    cleared = runtime.model_hub.clear_cooldown(provider.id)
+    if provider.last_health_status == "cooldown":
+        provider.last_health_status = "unknown"
+        await session.flush()
+    return {"ok": True, "cleared": cleared, "provider": runtime.model_hub.to_safe_view(provider)}
+
+
 @router.delete("/{provider_id}")
 async def delete_provider(
     provider_id: int,

@@ -1,3 +1,17 @@
+## v1.3.5 (2026-11-25)
+- **Token-Only Usage Tracking**: Removed dollar/money cost & budget displays from Dashboard KPIs, slot tables, and Provider editor modal; Dashboard now focuses purely on Today's Token Consumption, 7-Day Total Tokens, Input/Output/Cached Token breakdown, and Prompt Cache hit rate (`daily_budget_usd` defaults to `0.0` / disabled).
+
+## v1.3.4 (2026-11-25)
+- **TypeSafe AI Jev (`typesafe_systemone`) Official Schema Fix**:
+  - Switched Gatekeeper & health-probe request payloads from non-standard `enum`/`boolean` to official TypeSafe System One `choice` (with `criteria` map) and `noul` primitives.
+  - Updated `_parse_jev_response()` to parse official `answers.target.choice`, `confidence`, and `answers.should_chime_in.noul` (while retaining backward compatibility).
+  - Normalized System One endpoint URL construction so both `https://api.typesafe.ai` and OpenCode Zen `https://opencode.ai/zen/v1` resolve cleanly without duplicate `/v1`.
+- **Smart Failover Circuit-Breaker & Auto-Recovery**:
+  - Added error-aware cooldown routing across all slots (`chat_complete` & `evaluate_gatekeeper_slot`): HTTP `429`/`402` quota exhaustion immediately places `primary` into cooldown and routes subsequent traffic straight to `fallback` with 0ms wasted latency.
+  - Supports `Retry-After` headers, `extra_config.quota_cooldown_seconds` (default 1h with exponential backoff up to 6h), and `extra_config.quota_reset_utc_hour` for periodic daily-resetting free quotas.
+  - Automatic half-open recovery: once cooldown expires, the next request probes `primary` and seamlessly restores it on HTTP 200.
+  - Added `POST /api/providers/{id}/reset-cooldown` and WebUI cooldown status badge + one-click「恢复主路」button.
+
 # Changelog
 
 ## [1.3.3] - 2026-11-25（全量累计 Git 发布包）
