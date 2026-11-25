@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS memory_episodes (
     is_anniversary      BOOLEAN NOT NULL DEFAULT FALSE,
     event_date          DATE,
     embedding           vector(1536),
+    embedding_json      JSONB,
     tsv                 tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, ''))) STORED,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

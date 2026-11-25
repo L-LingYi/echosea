@@ -11,6 +11,7 @@ services:
       - pg_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./db/migrations_v2_v3.sql:/docker-entrypoint-initdb.d/02-migrations.sql:ro
+      - ./db/migrations_v1_1.sql:/docker-entrypoint-initdb.d/03-migrations-v1.1.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-companion} -d ${POSTGRES_DB:-companion}"]
       interval: 10s
@@ -48,12 +49,11 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${APP_PORT:-8000}:8000"
+      - "${APP_PORT:-8000}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - companion_net
-      - qq_gateway
 
   caddy:
     image: caddy:2-alpine
@@ -103,6 +103,3 @@ volumes:
 networks:
   companion_net:
     driver: bridge
-  qq_gateway:
-    external: true
-    name: astrbot-napcat_astrbot_network

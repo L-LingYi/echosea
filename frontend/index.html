@@ -2,93 +2,260 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Companion System v1.0 · 全功能云端总控台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>小呆呆 Companion System v1.1 · 云端意识总控台</title>
 <style>
   :root {
-    --bg: #f8fafc; --card: #ffffff; --ink: #0f172a; --ink2: #475569;
-    --border: #e2e8f0; --accent: #2563eb; --accent-dark: #1d4ed8;
-    --ok: #059669; --warn: #d97706; --danger: #dc2626;
-    --sidebar: #0f172a; --sidebar-ink: #cbd5e1;
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --ink: #0f172a;
+    --ink2: #475569;
+    --mute: #64748b;
+    --border: #e2e8f0;
+    --accent: #3b82f6;
+    --accent-dark: #2563eb;
+    --accent-soft: #eff6ff;
+    --ok: #10b981;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --sidebar: #0b1120;
+    --sidebar-hover: #1e293b;
+    --sidebar-ink: #cbd5e1;
+    --radius: 14px;
+    --shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; }
   .hidden { display: none !important; }
-  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); padding: 20px; }
-  .login-card { width: 100%; max-width: 390px; background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 20px 50px rgba(15,23,42,.35); }
-  .login-card h1 { margin: 0 0 6px; font-size: 22px; }
+
+  /* Login */
+  .login-wrap {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
+    background: radial-gradient(circle at 20% 20%, #1e3a8a 0%, #0b1120 55%, #020617 100%);
+  }
+  .login-card {
+    width: 100%; max-width: 400px; background: rgba(255,255,255,.97); border-radius: 18px;
+    padding: 34px 28px; box-shadow: 0 25px 60px rgba(2,6,23,.55);
+  }
+  .login-logo {
+    width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: #fff; font-weight: 800; font-size: 18px; margin-bottom: 14px;
+  }
+  .login-card h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.02em; }
   .login-card p { margin: 0 0 22px; color: var(--ink2); font-size: 13px; }
+
+  /* Layout */
   .app { display: flex; min-height: 100vh; }
-  .sidebar { width: 232px; background: var(--sidebar); color: var(--sidebar-ink); padding: 20px 14px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-  .brand { color: #fff; font-weight: 700; font-size: 16px; padding: 8px 12px 16px; border-bottom: 1px solid #1e293b; margin-bottom: 8px; }
-  .brand small { display: block; color: #94a3b8; font-weight: 400; font-size: 12px; margin-top: 2px; }
-  .nav-btn { background: transparent; border: 0; color: var(--sidebar-ink); text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; transition: .15s; }
-  .nav-btn:hover { background: #1e293b; color: #fff; }
-  .nav-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+  .sidebar {
+    width: 248px; background: var(--sidebar); color: var(--sidebar-ink);
+    padding: 20px 14px; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;
+    position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 40;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 11px; color: #fff; font-weight: 700; font-size: 15px;
+    padding: 6px 10px 16px; border-bottom: 1px solid #1e293b; margin-bottom: 10px;
+  }
+  .brand-orb {
+    width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
+    background: linear-gradient(135deg, #3b82f6, #a855f7); display: grid; place-items: center; color: #fff; font-weight: 800;
+  }
+  .brand small { display: block; color: #94a3b8; font-weight: 400; font-size: 11.5px; margin-top: 1px; }
+  .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; padding: 10px 12px 4px; font-weight: 600; }
+  .nav-btn {
+    background: transparent; border: 0; color: var(--sidebar-ink); text-align: left;
+    padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 13.5px;
+    display: flex; align-items: center; gap: 10px; transition: .15s; min-height: 40px;
+  }
+  .nav-btn:hover { background: var(--sidebar-hover); color: #fff; }
+  .nav-btn.active { background: linear-gradient(135deg, #2563eb, #3b82f6); color: #fff; font-weight: 600; box-shadow: 0 4px 12px rgba(37,99,235,.35); }
   .sidebar-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid #1e293b; font-size: 12px; }
-  .main { flex: 1; padding: 28px 32px; overflow-x: auto; }
-  .page-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; gap: 12px; }
-  .page-head h2 { margin: 0; font-size: 22px; }
-  .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
-  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; }
-  .kpi-label { color: var(--ink2); font-size: 12px; margin-bottom: 6px; }
-  .kpi-val { font-size: 24px; font-weight: 700; }
-  .kpi-sub { color: var(--ink2); font-size: 12px; margin-top: 4px; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+
+  /* Mobile Top Header & Bottom Bar */
+  .mobile-bar {
+    display: none; position: sticky; top: 0; z-index: 30;
+    background: rgba(11, 17, 32, 0.96); backdrop-filter: blur(10px); color: #fff;
+    padding: 10px 16px; align-items: center; justify-content: space-between;
+  }
+  .mobile-menu-btn {
+    background: #1e293b; border: 0; color: #fff; width: 38px; height: 38px;
+    border-radius: 10px; font-size: 18px; cursor: pointer; display: grid; place-items: center;
+  }
+  .drawer-backdrop { display: none; position: fixed; inset: 0; background: rgba(2,6,23,.55); z-index: 35; }
+  .mobile-bottom-nav {
+    display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    background: rgba(255,255,255,.96); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border); padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    grid-template-columns: repeat(5, 1fr); gap: 2px;
+  }
+  .mb-btn {
+    background: transparent; border: 0; color: var(--mute); font-size: 11px; font-weight: 600;
+    padding: 6px 2px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .mb-btn.active { color: var(--accent-dark); background: var(--accent-soft); }
+  .mb-ico { font-size: 16px; line-height: 1; }
+
+  /* Main Area */
+  .main { flex: 1; padding: 26px 30px 44px; min-width: 0; }
+  .page-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .page-head h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  .page-sub { color: var(--mute); font-size: 13px; margin-top: 2px; }
+
+  .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; margin-bottom: 16px; box-shadow: var(--shadow);
+  }
+  .card h3 { margin: 0 0 12px; font-size: 15.5px; font-weight: 700; }
+  .kpi-card { position: relative; overflow: hidden; }
+  .kpi-card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #3b82f6, #8b5cf6); }
+  .kpi-label { color: var(--mute); font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .kpi-val { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+  .kpi-sub { color: var(--ink2); font-size: 12px; margin-top: 6px; }
+
+  .badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
   .badge.ok { background: #dcfce7; color: #166534; }
   .badge.warn { background: #fef3c7; color: #92400e; }
   .badge.err { background: #fee2e2; color: #991b1b; }
   .badge.info { background: #dbeafe; color: #1e40af; }
-  label { display: block; font-size: 12px; font-weight: 600; color: var(--ink2); margin: 10px 0 4px; }
-  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; font-family: inherit; }
-  textarea { min-height: 84px; resize: vertical; }
-  .btn { background: var(--accent); color: #fff; border: 0; padding: 8px 14px; border-radius: 7px; cursor: pointer; font-weight: 600; font-size: 13px; }
-  .btn:hover { background: var(--accent-dark); }
+  .badge.purple { background: #f3e8ff; color: #6b21a8; }
+
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--ink2); margin: 10px 0 5px; }
+  input, select, textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+    font-size: 13.5px; font-family: inherit; background: #fff; color: var(--ink); transition: .15s;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  textarea { min-height: 86px; resize: vertical; }
+
+  .btn {
+    background: linear-gradient(135deg, #2563eb, #3b82f6); color: #fff; border: 0;
+    padding: 9px 15px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 13px;
+    min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: .15s;
+  }
+  .btn:hover { filter: brightness(1.06); transform: translateY(-0.5px); }
   .btn.secondary { background: #e2e8f0; color: var(--ink); }
-  .btn.danger { background: var(--danger); }
-  .btn.sm { padding: 5px 10px; font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { color: var(--ink2); font-weight: 600; background: #f8fafc; }
+  .btn.danger { background: linear-gradient(135deg, #dc2626, #ef4444); }
+  .btn.sm { padding: 6px 11px; font-size: 12px; min-height: 32px; border-radius: 8px; }
+
+  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 520px; }
+  th, td { text-align: left; padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--mute); font-weight: 600; background: #f8fafc; font-size: 12px; white-space: nowrap; }
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .toast { position: fixed; right: 20px; bottom: 20px; background: #0f172a; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 999; box-shadow: 0 10px 25px rgba(0,0,0,.25); }
-  @media (max-width: 960px) { .grid-4, .grid-2 { grid-template-columns: 1fr; } .app { flex-direction: column; } .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; } }
+
+  /* Consciousness Sea (意识海) Interactive Visualization */
+  .sea-shell {
+    background: radial-gradient(ellipse at 50% 45%, #111c3d 0%, #070d1f 65%, #030712 100%);
+    border-radius: 16px; border: 1px solid #1e293b; overflow: hidden; position: relative;
+    color: #e2e8f0; box-shadow: 0 18px 45px rgba(2, 6, 23, .35);
+  }
+  .sea-toolbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
+    padding: 12px 16px; background: rgba(15, 23, 42, .78); border-bottom: 1px solid rgba(148,163,184,.16);
+    backdrop-filter: blur(8px);
+  }
+  .sea-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    border: 1px solid rgba(148,163,184,.28); background: rgba(30,41,59,.7); color: #cbd5e1;
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+  }
+  .chip.on { border-color: #60a5fa; background: rgba(37,99,235,.32); color: #fff; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .sea-stage { position: relative; height: 540px; width: 100%; touch-action: none; }
+  #seaCanvas { width: 100%; height: 100%; display: block; cursor: grab; }
+  #seaCanvas:active { cursor: grabbing; }
+  .sea-inspector {
+    position: absolute; right: 14px; top: 14px; width: 290px; max-width: calc(100% - 28px);
+    background: rgba(15, 23, 42, .9); backdrop-filter: blur(12px);
+    border: 1px solid rgba(148,163,184,.25); border-radius: 12px; padding: 14px 16px;
+    color: #f8fafc; font-size: 12.5px; max-height: calc(100% - 28px); overflow-y: auto;
+  }
+  .sea-inspector h4 { margin: 0 0 6px; font-size: 15px; color: #fff; }
+  .sea-stat-bar {
+    position: absolute; left: 14px; bottom: 12px; background: rgba(15,23,42,.75);
+    padding: 6px 12px; border-radius: 999px; font-size: 11.5px; color: #94a3b8;
+    border: 1px solid rgba(148,163,184,.18); pointer-events: none;
+  }
+
+  .toast {
+    position: fixed; right: 18px; bottom: 22px; background: #0f172a; color: #fff;
+    padding: 11px 16px; border-radius: 10px; font-size: 13px; z-index: 999;
+    box-shadow: 0 12px 30px rgba(0,0,0,.3);
+  }
+
+  /* Full Mobile Adaptation */
+  @media (max-width: 1024px) {
+    .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 768px) {
+    .app { flex-direction: column; }
+    .mobile-bar { display: flex; }
+    .mobile-bottom-nav { display: grid; }
+    .sidebar {
+      position: fixed; left: -270px; top: 0; bottom: 0; height: 100vh; width: 256px;
+      transition: left .22s ease; box-shadow: 8px 0 30px rgba(2,6,23,.45);
+    }
+    .sidebar.open { left: 0; }
+    .drawer-backdrop.open { display: block; }
+    .main { padding: 16px 14px 86px; }
+    .page-head h2 { font-size: 19px; }
+    .card { padding: 14px 14px; border-radius: 12px; }
+    .kpi-val { font-size: 20px; }
+    .sea-stage { height: 430px; }
+    .sea-inspector { position: static; width: 100%; max-width: 100%; border-radius: 0; border: 0; border-top: 1px solid rgba(148,163,184,.2); }
+    .toast { left: 14px; right: 14px; bottom: 76px; text-align: center; }
+  }
 </style>
 </head>
 <body>
 
 <div id="loginView" class="login-wrap">
   <div class="login-card">
-    <h1>Companion System v1.0</h1>
-    <p>SnowLuma 网关 · 独立拟人陪伴系统全功能云端总控台</p>
+    <div class="login-logo">呆</div>
+    <h1>Companion System v1.1</h1>
+    <p>SnowLuma 网关 · 意识海记忆图谱 · 云端全功能总控台</p>
     <form id="loginForm">
       <label>管理员账号</label>
-      <input id="loginUser" value="admin" required />
+      <input id="loginUser" value="admin" autocomplete="username" required />
       <label>密码</label>
-      <input id="loginPass" type="password" placeholder="请输入管理员密码" required />
+      <input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入管理员密码" required />
       <label>TOTP 二步验证码（未开启可留空）</label>
-      <input id="loginTotp" placeholder="6位动态码" />
-      <div style="margin-top:18px;"><button class="btn" style="width:100%;" type="submit">登录控制台</button></div>
+      <input id="loginTotp" inputmode="numeric" placeholder="6位动态码" />
+      <div style="margin-top:20px;"><button class="btn" style="width:100%;" type="submit">登录总控台</button></div>
       <div id="loginErr" style="color:var(--danger);font-size:12px;margin-top:10px;"></div>
     </form>
   </div>
 </div>
 
 <div id="appView" class="app hidden">
-  <aside class="sidebar">
+  <!-- Mobile Top Header -->
+  <header class="mobile-bar">
+    <button class="mobile-menu-btn" onclick="toggleDrawer()" aria-label="菜单">☰</button>
+    <div style="font-weight:700;font-size:15px;">小呆呆 · 意识总控台</div>
+    <button class="mobile-menu-btn" onclick="refreshCurrentTab()" aria-label="刷新">↻</button>
+  </header>
+  <div id="drawerBackdrop" class="drawer-backdrop" onclick="toggleDrawer(false)"></div>
+
+  <aside id="sidebar" class="sidebar">
     <div class="brand">
-      Companion System
-      <small>v1.0 Full · SnowLuma</small>
+      <div class="brand-orb">呆</div>
+      <div>Companion System<small>v1.1 · SnowLuma &amp; Jev</small></div>
     </div>
-    <button class="nav-btn active" data-tab="dashboard">运行仪表盘</button>
-    <button class="nav-btn" data-tab="providers">模型总控中心</button>
-    <button class="nav-btn" data-tab="memory">五层记忆与熟人卡</button>
-    <button class="nav-btn" data-tab="stickers">表情包图库</button>
-    <button class="nav-btn" data-tab="persona">人设与回放沙盒</button>
-    <button class="nav-btn" data-tab="perception">热点简报与日程</button>
-    <button class="nav-btn" data-tab="ops">反思、插件与备份</button>
-    <button class="nav-btn" data-tab="alerts">24h 告警通知</button>
+    <div class="nav-group">核心观测</div>
+    <button class="nav-btn active" data-tab="dashboard">📊 运行仪表盘</button>
+    <button class="nav-btn" data-tab="sea">🌌 意识海 · 记忆图谱</button>
+    <button class="nav-btn" data-tab="traces">🔎 全链路追踪</button>
+    <div class="nav-group">智能与记忆</div>
+    <button class="nav-btn" data-tab="providers">🧠 模型总控中心</button>
+    <button class="nav-btn" data-tab="memory">🗂️ 熟人卡与忘却</button>
+    <button class="nav-btn" data-tab="stickers">🎭 表情包图库</button>
+    <button class="nav-btn" data-tab="persona">✨ 人设与回放评测</button>
+    <div class="nav-group">生态与运维</div>
+    <button class="nav-btn" data-tab="perception">🌐 热点简报与日程</button>
+    <button class="nav-btn" data-tab="ops">🧩 反思、插件与备份</button>
+    <button class="nav-btn" data-tab="alerts">🔔 24h 告警通知</button>
     <div class="sidebar-foot">
       <div id="userInfo" style="margin-bottom:8px;">已登录</div>
       <button class="btn secondary sm" style="width:100%;" onclick="logout()">退出登录</button>
@@ -99,132 +266,183 @@
     <!-- Dashboard -->
     <section id="tab-dashboard">
       <div class="page-head">
-        <h2>运行仪表盘（近 7 天）</h2>
+        <div><h2>运行仪表盘</h2><div class="page-sub">已剔除健康探针样本 · 仅统计真实生产调用</div></div>
         <button class="btn secondary sm" onclick="loadDashboard()">刷新数据</button>
       </div>
       <div class="grid-4" id="kpiRow"></div>
       <div class="grid-2">
-        <div class="card"><h3 style="margin-top:0;">网关、TTS 与底座健康</h3><div id="healthBox">加载中...</div></div>
-        <div class="card"><h3 style="margin-top:0;">门卫放行 / 拦截统计</h3><div id="gatekeeperBox">加载中...</div></div>
+        <div class="card"><h3>网关、TTS 回执与底座健康</h3><div id="healthBox">加载中...</div></div>
+        <div class="card"><h3>门卫放行 / 拦截分布</h3><div id="gatekeeperBox">加载中...</div></div>
       </div>
       <div class="card">
-        <h3 style="margin-top:0;">分槽位 Token 与费用明细</h3>
-        <table><thead><tr><th>槽位</th><th>调用次数</th><th>总 Tokens</th><th>预估费用 (USD)</th></tr></thead><tbody id="slotTable"></tbody></table>
+        <h3>分槽位 Token 与费用明细</h3>
+        <div class="table-wrap">
+          <table><thead><tr><th>槽位</th><th>调用次数</th><th>总 Tokens</th><th>预估费用 (USD)</th></tr></thead><tbody id="slotTable"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Consciousness Sea (意识海) -->
+    <section id="tab-sea" class="hidden">
+      <div class="page-head">
+        <div><h2>意识海 · 五层记忆关联图谱</h2><div class="page-sub">拖动节点或双指/滚轮缩放，点击任意记忆星点查看关联与群/私聊半隔离边界</div></div>
+        <div class="row-actions">
+          <button class="btn sm secondary" onclick="loadConsciousnessSea(true)">✨ 演示星图</button>
+          <button class="btn sm" onclick="loadConsciousnessSea(false)">刷新真实记忆</button>
+        </div>
+      </div>
+      <div class="sea-shell">
+        <div class="sea-toolbar">
+          <div class="sea-filters" id="seaFilters">
+            <button class="chip on" data-layer="L5_self"><span class="dot" style="background:#facc15"></span>自我核心</button>
+            <button class="chip on" data-layer="group"><span class="dot" style="background:#38bdf8"></span>群聊域</button>
+            <button class="chip on" data-layer="L4_identity"><span class="dot" style="background:#34d399"></span>熟人卡</button>
+            <button class="chip on" data-layer="L2_ambient"><span class="dot" style="background:#22d3ee"></span>边缘旁听</button>
+            <button class="chip on" data-layer="L3_public_episode"><span class="dot" style="background:#818cf8"></span>群情景</button>
+            <button class="chip on" data-layer="L3_private_episode"><span class="dot" style="background:#f43f5e"></span>私密半隔离</button>
+            <button class="chip on" data-layer="L4_slang"><span class="dot" style="background:#fb923c"></span>群黑话</button>
+          </div>
+          <div class="row-actions">
+            <button class="chip" onclick="seaZoom(1.2)">＋</button>
+            <button class="chip" onclick="seaZoom(0.83)">－</button>
+            <button class="chip" onclick="seaResetView()">重置视角</button>
+          </div>
+        </div>
+        <div class="sea-stage">
+          <canvas id="seaCanvas"></canvas>
+          <div id="seaStats" class="sea-stat-bar">正在凝结意识海...</div>
+          <div id="seaInspector" class="sea-inspector">
+            <h4>点击任意星点探索记忆</h4>
+            <p style="color:#94a3b8;margin:0;">这里会展示该记忆节点的详情、关联人物、亲密度及公开/私聊半隔离状态。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pipeline Traces (v1.1) -->
+    <section id="tab-traces" class="hidden">
+      <div class="page-head">
+        <div><h2>全链路请求追踪（脱敏）</h2><div class="page-sub">以统一 request_id 串联入站、门卫、主脑、TTS 与 OneBot 回执，不记录聊天正文</div></div>
+        <button class="btn secondary sm" onclick="loadTraces()">刷新追踪</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table><thead><tr><th>Request ID</th><th>场景 / 群</th><th>阶段</th><th>状态</th><th>耗时</th><th>失败类型</th><th>时间</th></tr></thead><tbody id="traceTable"></tbody></table>
+        </div>
       </div>
     </section>
 
     <!-- Model Control Center -->
     <section id="tab-providers" class="hidden">
-      <div class="page-head"><h2>模型接入总控中心（六大标准槽位）</h2><button class="btn secondary sm" onclick="loadProviders()">刷新</button></div>
+      <div class="page-head"><div><h2>模型接入总控中心</h2><div class="page-sub">支持 OpenAI 兼容协议与 TypeSafe AI Jev 原生 System One 门卫协议</div></div><button class="btn secondary sm" onclick="loadProviders()">刷新</button></div>
       <div class="card">
         <form id="providerForm" class="grid-2">
           <div>
             <label>能力槽位</label>
             <select id="pSlot">
               <option value="main_brain">main_brain（原生多模态主脑）</option>
-              <option value="gatekeeper">gatekeeper（轻量门卫小模型）</option>
+              <option value="gatekeeper">gatekeeper（门卫模型 · 推荐 Jev）</option>
               <option value="reflection">reflection（凌晨反思模型）</option>
               <option value="embedding">embedding（向量检索模型）</option>
               <option value="tts">tts（豆包 TTS 语音引擎）</option>
               <option value="web_search">web_search（按需联网搜索源）</option>
             </select>
+            <label>接口协议</label>
+            <select id="pProto">
+              <option value="openai_compatible">openai_compatible（标准 /chat/completions）</option>
+              <option value="typesafe_systemone">typesafe_systemone（TypeSafe AI Jev /v1/systemone）</option>
+            </select>
             <label>主备角色</label>
             <select id="pRole"><option value="primary">primary（主路由）</option><option value="fallback">fallback（备用切换）</option></select>
-            <label>名称</label><input id="pName" placeholder="例如 DeepSeek-V3 主线" required />
-            <label>Base URL</label><input id="pUrl" placeholder="https://api.openai.com/v1" required />
+            <label>名称</label><input id="pName" placeholder="例如 Jev-1.14 门卫 / DeepSeek 主线" required />
           </div>
           <div>
-            <label>Model Name / Voice Type</label><input id="pModel" placeholder="gpt-4o / deepseek-chat / BV700_V2_streaming" required />
-            <label>API Key（AES-256-GCM 加密落库）</label><input id="pKey" type="password" placeholder="sk-..." />
+            <label>Base URL</label><input id="pUrl" placeholder="https://api.typesafe.ai 或 https://api.openai.com/v1" required />
+            <label>Model Name / Voice Type</label><input id="pModel" placeholder="jev-1.14 / deepseek-v4.1-flash" required />
+            <label>API Key（AES-256-GCM 加密落库）</label><input id="pKey" type="password" placeholder="sk-...（留空保持原密钥）" />
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-              <div><label>输入单价 ($/1M)</label><input id="pInPrice" type="number" step="0.01" value="0.27" /></div>
-              <div><label>输出单价 ($/1M)</label><input id="pOutPrice" type="number" step="0.01" value="1.10" /></div>
+              <div><label>输入单价 ($/1M)</label><input id="pInPrice" type="number" step="0.001" value="0.042" /></div>
+              <div><label>输出单价 ($/1M)</label><input id="pOutPrice" type="number" step="0.001" value="0.0" /></div>
             </div>
             <div style="margin-top:16px;"><button class="btn" type="submit">保存并热生效</button></div>
           </div>
         </form>
       </div>
-      <div class="card"><table><thead><tr><th>槽位</th><th>角色</th><th>名称 / 模型</th><th>密钥掩码</th><th>健康状态</th><th>操作</th></tr></thead><tbody id="providerTable"></tbody></table></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>槽位</th><th>协议 / 角色</th><th>名称 / 模型</th><th>密钥掩码</th><th>健康状态</th><th>操作</th></tr></thead><tbody id="providerTable"></tbody></table></div></div>
     </section>
 
     <!-- Memory -->
     <section id="tab-memory" class="hidden">
-      <div class="page-head"><h2>五层记忆、QQ 强绑定熟人卡与一键忘却</h2><button class="btn secondary sm" onclick="loadMemory()">刷新</button></div>
+      <div class="page-head"><h2>QQ 强绑定熟人卡与一键忘却</h2><button class="btn secondary sm" onclick="loadMemory()">刷新</button></div>
       <div class="card">
-        <h3 style="margin-top:0;">QQ 身份与熟人卡（群聊/私聊严格半隔离）</h3>
-        <table><thead><tr><th>QQ 号</th><th>当前昵称</th><th>历史名片 known_names</th><th>亲密度</th><th>操作</th></tr></thead><tbody id="identityTable"></tbody></table>
+        <h3>QQ 身份与熟人卡（群聊/私聊严格半隔离）</h3>
+        <div class="table-wrap"><table><thead><tr><th>QQ 号</th><th>当前昵称</th><th>历史名片 known_names</th><th>亲密度</th><th>操作</th></tr></thead><tbody id="identityTable"></tbody></table></div>
       </div>
-      <div class="card"><h3 style="margin-top:0;">L2 边缘旁听摘要</h3><div id="ambientBox">暂无摘要</div></div>
+      <div class="card"><h3>L2 边缘旁听摘要</h3><div id="ambientBox">暂无摘要</div></div>
     </section>
 
-    <!-- Stickers (Phase 2) -->
+    <!-- Stickers -->
     <section id="tab-stickers" class="hidden">
       <div class="page-head"><h2>表情包自学习图库与批量导入</h2><button class="btn secondary sm" onclick="loadStickers()">刷新</button></div>
       <div class="card">
-        <h3 style="margin-top:0;">手工批量导入（每行格式：图片URL|情绪标签逗号分隔|语境说明）</h3>
+        <h3>手工批量导入（每行：图片URL|情绪标签逗号分隔|语境说明）</h3>
         <textarea id="stickerImportInput" placeholder="https://example.com/laugh.gif|laugh,哈哈|群友说离谱话时斗图"></textarea>
-        <div style="margin-top:8px;"><button class="btn" onclick="importStickers()">批量导入并启用</button></div>
+        <div style="margin-top:10px;"><button class="btn" onclick="importStickers()">批量导入并启用</button></div>
       </div>
-      <div class="card"><table><thead><tr><th>来源 / 哈希</th><th>标签</th><th>热度/正向反应</th><th>状态</th><th>操作</th></tr></thead><tbody id="stickerTable"></tbody></table></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>来源 / 哈希</th><th>标签</th><th>热度 / 反应</th><th>状态</th><th>操作</th></tr></thead><tbody id="stickerTable"></tbody></table></div></div>
     </section>
 
     <!-- Persona & Sandbox -->
     <section id="tab-persona" class="hidden">
-      <div class="page-head"><h2>人设版本与群聊回放沙盒</h2></div>
+      <div class="page-head"><h2>人设版本与门卫回放评测</h2></div>
       <div class="grid-2">
-        <div class="card"><h3 style="margin-top:0;">当前人设版本</h3><div id="personaList">加载中...</div></div>
+        <div class="card"><h3>当前人设版本</h3><div id="personaList">加载中...</div></div>
         <div class="card">
-          <h3 style="margin-top:0;">门卫回放沙盒（无损调参）</h3>
+          <h3>门卫回放沙盒（无损调参）</h3>
           <label>软切入阈值 (0.0 - 1.0)</label><input id="simThreshold" type="number" step="0.05" value="0.78" />
           <label>测试群聊片段（每行：发言人QQ|内容）</label>
           <textarea id="simInput">10001|小呆呆，帮我看看今天吃啥
 10002|小呆呆刚才笑死我了
 10003|晚饭吃麻辣烫还是烧烤？</textarea>
           <div style="margin-top:10px;"><button class="btn" onclick="runSandbox()">运行门卫回放</button></div>
-          <pre id="simResult" style="background:#f1f5f9;padding:10px;border-radius:7px;overflow:auto;font-size:12px;margin-top:10px;"></pre>
+          <pre id="simResult" style="background:#f1f5f9;padding:10px;border-radius:10px;overflow:auto;font-size:12px;margin-top:10px;"></pre>
         </div>
       </div>
     </section>
 
-    <!-- Perception & Schedule (Phase 3) -->
+    <!-- Perception & Schedule -->
     <section id="tab-perception" class="hidden">
       <div class="page-head">
-        <h2>互联网热点简报与角色作息状态机</h2>
+        <h2>互联网热点简报与角色作息</h2>
         <div class="row-actions">
           <button class="btn sm" onclick="refreshBriefing()">抓取今日刷网简报</button>
-          <button class="btn sm secondary" onclick="syncSchedule()">同步当前作息状态</button>
+          <button class="btn sm secondary" onclick="syncSchedule()">同步当前作息</button>
         </div>
       </div>
       <div class="grid-2">
-        <div class="card">
-          <h3 style="margin-top:0;">今日刷网背景常识（绝不群发新闻）</h3>
-          <pre id="briefingBox" style="white-space:pre-wrap;background:#f1f5f9;padding:12px;border-radius:7px;font-size:12px;">暂无简报</pre>
-        </div>
-        <div class="card">
-          <h3 style="margin-top:0;">角色 24h 作息日程表</h3>
-          <table><thead><tr><th>时段</th><th>活动</th><th>默认心情</th><th>精力目标</th></tr></thead><tbody id="scheduleTable"></tbody></table>
-        </div>
+        <div class="card"><h3>今日刷网背景常识（绝不群发）</h3><pre id="briefingBox" style="white-space:pre-wrap;background:#f8fafc;padding:12px;border-radius:10px;font-size:12.5px;">暂无简报</pre></div>
+        <div class="card"><h3>24h 作息日程表</h3><div class="table-wrap"><table><thead><tr><th>时段</th><th>活动</th><th>心情</th><th>精力</th></tr></thead><tbody id="scheduleTable"></tbody></table></div></div>
       </div>
     </section>
 
-    <!-- Reflection, Plugins & Backups (Phase 2 & 3) -->
+    <!-- Ops -->
     <section id="tab-ops" class="hidden">
       <div class="page-head">
-        <h2>凌晨离线反思、插件总线与异地备份</h2>
+        <h2>离线反思、插件总线与异地备份</h2>
         <div class="row-actions">
-          <button class="btn sm" onclick="runReflection()">立即触发离线反思</button>
-          <button class="btn sm secondary" onclick="triggerBackup()">触发异地备份同步</button>
+          <button class="btn sm" onclick="runReflection()">触发离线反思</button>
+          <button class="btn sm secondary" onclick="triggerBackup()">触发异地备份</button>
         </div>
       </div>
       <div class="grid-2">
-        <div class="card"><h3 style="margin-top:0;">已加载标准插件（独立超时与异常隔离）</h3><div id="pluginList">加载中...</div></div>
-        <div class="card"><h3 style="margin-top:0;">PostgreSQL 滚动与异地备份记录</h3><div id="backupList">加载中...</div></div>
+        <div class="card"><h3>已加载标准插件</h3><div id="pluginList">加载中...</div></div>
+        <div class="card"><h3>PostgreSQL 异地备份记录</h3><div id="backupList">加载中...</div></div>
       </div>
     </section>
 
     <!-- Alerts -->
     <section id="tab-alerts" class="hidden">
-      <div class="page-head"><h2>24h 异常告警通知（邮件 / Webhook / 管理员 QQ）</h2><button class="btn sm" onclick="sendTestAlert()">发送测试告警</button></div>
+      <div class="page-head"><h2>24h 异常告警通知</h2><button class="btn sm" onclick="sendTestAlert()">发送测试告警</button></div>
       <div class="card">
         <form id="alertForm" class="grid-2">
           <div>
@@ -238,16 +456,33 @@
           </div>
         </form>
       </div>
-      <div class="card"><h3 style="margin-top:0;">已配置通道与近期告警</h3><div id="alertList">加载中...</div></div>
+      <div class="card"><h3>已配置通道与近期告警</h3><div id="alertList">加载中...</div></div>
     </section>
   </main>
+
+  <!-- Mobile Bottom Quick Tab Bar -->
+  <nav class="mobile-bottom-nav">
+    <button class="mb-btn active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="mb-ico">📊</span>仪表盘</button>
+    <button class="mb-btn" data-tab="sea" onclick="switchTab('sea')"><span class="mb-ico">🌌</span>意识海</button>
+    <button class="mb-btn" data-tab="providers" onclick="switchTab('providers')"><span class="mb-ico">🧠</span>模型</button>
+    <button class="mb-btn" data-tab="memory" onclick="switchTab('memory')"><span class="mb-ico">🗂️</span>记忆</button>
+    <button class="mb-btn" onclick="toggleDrawer(true)"><span class="mb-ico">☰</span>更多</button>
+  </nav>
 </div>
 
 <div id="toast" class="toast hidden"></div>
 
 <script>
 let TOKEN = localStorage.getItem('companion_token') || '';
+let CURRENT_TAB = 'dashboard';
+const TABS = ['dashboard','sea','traces','providers','memory','stickers','persona','perception','ops','alerts'];
+
 function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 2600); }
+function toggleDrawer(force) {
+  const sb = document.getElementById('sidebar'), bd = document.getElementById('drawerBackdrop');
+  const open = typeof force === 'boolean' ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open', open); bd.classList.toggle('open', open);
+}
 async function api(path, opts = {}) {
   const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
   if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
@@ -265,39 +500,303 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
   } catch (err) { document.getElementById('loginErr').textContent = err.message; }
 });
 function logout() { TOKEN = ''; localStorage.removeItem('companion_token'); document.getElementById('appView').classList.add('hidden'); document.getElementById('loginView').classList.remove('hidden'); }
-function enterApp(u) { document.getElementById('loginView').classList.add('hidden'); document.getElementById('appView').classList.remove('hidden'); document.getElementById('userInfo').textContent = '管理员：' + u; loadDashboard(); }
-const TABS = ['dashboard','providers','memory','stickers','persona','perception','ops','alerts'];
-document.querySelectorAll('.nav-btn').forEach(btn => btn.addEventListener('click', () => {
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active');
-  const tab = btn.dataset.tab; TABS.forEach(t => document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab));
-  if (tab==='dashboard') loadDashboard(); if (tab==='providers') loadProviders(); if (tab==='memory') loadMemory();
-  if (tab==='stickers') loadStickers(); if (tab==='persona') loadPersona(); if (tab==='perception') loadPerception();
-  if (tab==='ops') loadOps(); if (tab==='alerts') loadAlerts();
-}));
+function enterApp(u) { document.getElementById('loginView').classList.add('hidden'); document.getElementById('appView').classList.remove('hidden'); document.getElementById('userInfo').textContent = '管理员：' + u; switchTab('dashboard'); }
+
+function switchTab(tab) {
+  CURRENT_TAB = tab;
+  toggleDrawer(false);
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.mb-btn[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  TABS.forEach(t => document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab));
+  refreshCurrentTab();
+}
+function refreshCurrentTab() {
+  if (CURRENT_TAB==='dashboard') loadDashboard();
+  if (CURRENT_TAB==='sea') loadConsciousnessSea(false);
+  if (CURRENT_TAB==='traces') loadTraces();
+  if (CURRENT_TAB==='providers') loadProviders();
+  if (CURRENT_TAB==='memory') loadMemory();
+  if (CURRENT_TAB==='stickers') loadStickers();
+  if (CURRENT_TAB==='persona') loadPersona();
+  if (CURRENT_TAB==='perception') loadPerception();
+  if (CURRENT_TAB==='ops') loadOps();
+  if (CURRENT_TAB==='alerts') loadAlerts();
+}
+document.querySelectorAll('.nav-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+/* --- Dashboard --- */
 async function loadDashboard() {
   const d = await api('/api/dashboard/overview?days=7');
   document.getElementById('kpiRow').innerHTML = `
-    <div class="card"><div class="kpi-label">今日费用 / 日预算上限</div><div class="kpi-val">$${d.cost.today_spend_usd.toFixed(4)}</div><div class="kpi-sub">上限 $${d.cost.daily_budget_usd} · ${d.cost.budget_fuse_active?'<span class="badge err">已熔断</span>':'<span class="badge ok">正常</span>'}</div></div>
-    <div class="card"><div class="kpi-label">Prompt Cache 命中率</div><div class="kpi-val">${d.tokens.prompt_cache_hit_rate_pct}%</div><div class="kpi-sub">调用 ${d.tokens.total_calls} 次 · TTFT ${d.tokens.avg_ttft_ms}ms</div></div>
-    <div class="card"><div class="kpi-label">门卫放行率</div><div class="kpi-val">${d.gatekeeper.pass_rate_pct}%</div><div class="kpi-sub">处理消息 ${d.gatekeeper.total_messages} 条</div></div>
-    <div class="card"><div class="kpi-label">豆包 TTS 成功率</div><div class="kpi-val">${d.tts.success_rate_pct}%</div><div class="kpi-sub">图库已启用 ${d.counts.stickers_approved} 张 · QQ 身份 ${d.counts.qq_identities}</div></div>
+    <div class="card kpi-card"><div class="kpi-label">今日费用 / 日预算</div><div class="kpi-val">$${d.cost.today_spend_usd.toFixed(4)}</div><div class="kpi-sub">上限 $${d.cost.daily_budget_usd} · ${d.cost.budget_fuse_active?'<span class="badge err">已熔断</span>':'<span class="badge ok">正常</span>'}</div></div>
+    <div class="card kpi-card"><div class="kpi-label">生产耗时 (Avg / P95)</div><div class="kpi-val">${d.tokens.avg_ttft_ms}ms</div><div class="kpi-sub">P95 ${d.tokens.p95_ttft_ms}ms · 缓存命中 ${d.tokens.prompt_cache_hit_rate_pct}%</div></div>
+    <div class="card kpi-card"><div class="kpi-label">门卫放行率</div><div class="kpi-val">${d.gatekeeper.pass_rate_pct}%</div><div class="kpi-sub">累计消息 ${d.gatekeeper.total_messages} 条</div></div>
+    <div class="card kpi-card"><div class="kpi-label">豆包语音受理率</div><div class="kpi-val">${d.tts.success_rate_pct}%</div><div class="kpi-sub">合成 ${d.tts.synthesized_count} / 受理 ${d.tts.onebot_accepted_count} · 身份 ${d.counts.qq_identities}</div></div>
   `;
   const gw = d.health.gateway;
-  document.getElementById('healthBox').innerHTML = `<p><strong>协议网关：</strong>${gw.gateway} ${gw.connected?'<span class="badge ok">在线</span>':'<span class="badge warn">未连接</span>'} (${gw.mode})</p><p><strong>状态存储：</strong>${d.health.state_store} · <strong>已加载插件：</strong>${d.health.plugins.length}</p>`;
-  document.getElementById('gatekeeperBox').innerHTML = `<pre style="margin:0;font-size:12px;">${JSON.stringify(d.gatekeeper.breakdown, null, 2)}</pre>`;
-  document.getElementById('slotTable').innerHTML = d.by_slot.length ? d.by_slot.map(s=>`<tr><td>${s.slot}</td><td>${s.calls}</td><td>${s.tokens}</td><td>$${s.cost_usd}</td></tr>`).join('') : '<tr><td colspan="4">暂无调用数据</td></tr>';
+  document.getElementById('healthBox').innerHTML = `<p><strong>协议网关：</strong>${gw.gateway} ${gw.connected?'<span class="badge ok">在线</span>':'<span class="badge warn">未连接</span>'} (${gw.mode})</p><p><strong>状态存储：</strong>${d.health.state_store} · <strong>已加载插件：</strong>${d.health.plugins.length} · <strong>已启用表情包：</strong>${d.counts.stickers_approved}</p>`;
+  document.getElementById('gatekeeperBox').innerHTML = `<pre style="margin:0;font-size:12px;overflow:auto;">${JSON.stringify(d.gatekeeper.breakdown, null, 2)}</pre>`;
+  document.getElementById('slotTable').innerHTML = d.by_slot.length ? d.by_slot.map(s=>`<tr><td><span class="badge info">${s.slot}</span></td><td>${s.calls}</td><td>${s.tokens}</td><td>$${s.cost_usd}</td></tr>`).join('') : '<tr><td colspan="4">暂无生产调用数据</td></tr>';
 }
+
+/* --- Traces --- */
+async function loadTraces() {
+  const rows = await api('/api/dashboard/traces?limit=80');
+  document.getElementById('traceTable').innerHTML = rows.length ? rows.map(r=>`<tr>
+    <td><code>${r.request_id}</code></td><td>${r.scene}${r.group_id ? ' / '+r.group_id : ''}</td>
+    <td><span class="badge info">${r.stage}</span></td>
+    <td><span class="badge ${['ok','accepted','synthesized','direct_pass','soft_entry'].includes(r.status)?'ok':(r.status==='silent'?'warn':'err')}">${r.status}</span></td>
+    <td>${r.latency_ms}ms</td><td>${r.error_type || '-'}</td><td>${r.created_at.slice(5,19).replace('T',' ')}</td>
+  </tr>`).join('') : '<tr><td colspan="7">暂无追踪记录</td></tr>';
+}
+
+/* --- Consciousness Sea (意识海) Interactive Force-Directed Canvas --- */
+const LAYER_COLORS = {
+  L5_self: '#facc15', group: '#38bdf8', L4_identity: '#34d399',
+  L2_ambient: '#22d3ee', L3_public_episode: '#818cf8', L3_private_episode: '#f43f5e', L4_slang: '#fb923c'
+};
+const LAYER_NAMES = {
+  L5_self: 'L5 自我核心', group: '群聊记忆域', L4_identity: 'L4 熟人卡',
+  L2_ambient: 'L2 边缘旁听', L3_public_episode: 'L3 群情景/纪念', L3_private_episode: 'L3 私聊半隔离', L4_slang: 'L4 群黑话'
+};
+let SEA = { nodes: [], edges: [], visibleLayers: new Set(Object.keys(LAYER_COLORS)), camX: 0, camY: 0, zoom: 1, selected: null, dragNode: null, panning: false, lastX: 0, lastY: 0, raf: null, tick: 0 };
+
+function makeDemoSea() {
+  return {
+    nodes: [
+      { id:'self_core', label:'小呆呆 · 意识核心', layer:'L5_self', size:28, summary:'精力 88 · 心情 excited · 晚间吹水看群', detail:{ energy_level:88, mood:'excited', current_activity:'晚间吹水看群' } },
+      { id:'group_101', label:'群 101 · 摸鱼主群', layer:'group', size:21, summary:'活跃群聊记忆域', detail:{ group_id:101 } },
+      { id:'qq_1', label:'阿明', layer:'L4_identity', size:18, summary:'QQ 10086 · 亲密度 82', detail:{ qq_id:10086, known_names:['阿明','卷王明','摸鱼明'], relationship_level:82, public_profile:{ interests:['原神','烧烤'] }, has_private_isolation:true } },
+      { id:'qq_2', label:'红姐', layer:'L4_identity', size:16, summary:'QQ 20001 · 亲密度 65', detail:{ qq_id:20001, known_names:['小红','红姐'], relationship_level:65, public_profile:{ interests:['露营','吸猫'] } } },
+      { id:'amb_1', label:'边缘旁听 #12', layer:'L2_ambient', size:13, summary:'刚才大家在争晚饭吃麻辣烫还是烧烤', detail:{ message_count:24, summary_text:'近2小时群内热议晚饭选麻辣烫还是烧烤，阿明和红姐互相吐槽。' } },
+      { id:'ep_1', label:'五排连胜之夜', layer:'L3_public_episode', size:16, summary:'群内共同经历 · 纪念日', detail:{ scope:'public_group', is_anniversary:true, content:'昨晚和群友五排连胜五把，笑到凌晨两点。' } },
+      { id:'ep_2', label:'私聊吐露换工作', layer:'L3_private_episode', size:15, summary:'仅私聊可见 · SQL 级严格半隔离', detail:{ scope:'private_dm', content:'私聊时聊到想换工作，群聊绝不提及。' } },
+      { id:'slang_1', label:'梗·寄了', layer:'L4_slang', size:11, summary:'事情办砸了 (approved)', detail:{ phrase:'寄了', meaning:'事情办砸了', status:'approved', usage_count:19 } }
+    ],
+    edges: [
+      { source:'self_core', target:'group_101', relation:'常驻群域' },
+      { source:'self_core', target:'qq_1', relation:'熟人羁绊' },
+      { source:'self_core', target:'qq_2', relation:'熟人羁绊' },
+      { source:'qq_1', target:'group_101', relation:'群名片:摸鱼明' },
+      { source:'qq_2', target:'group_101', relation:'群名片:红姐' },
+      { source:'group_101', target:'amb_1', relation:'旁听沉淀' },
+      { source:'qq_1', target:'amb_1', relation:'参与讨论' },
+      { source:'qq_2', target:'amb_1', relation:'参与讨论' },
+      { source:'group_101', target:'ep_1', relation:'群内情景' },
+      { source:'qq_1', target:'ep_1', relation:'共同经历' },
+      { source:'qq_1', target:'ep_2', relation:'私密记忆(半隔离)' },
+      { source:'group_101', target:'slang_1', relation:'群黑话' }
+    ]
+  };
+}
+
+async function loadConsciousnessSea(forceDemo = false) {
+  let data = forceDemo ? makeDemoSea() : await api('/api/memory/graph');
+  if (!forceDemo && (!data.nodes || data.nodes.length <= 1)) {
+    data = makeDemoSea();
+    document.getElementById('seaStats').textContent = '当前库内记忆较少，已自动展示「演示星图」· 有真实对话后自动切换';
+  } else {
+    document.getElementById('seaStats').textContent = `节点 ${data.nodes.length} · 关联 ${data.edges.length} · 点击任意星点查看详情`;
+  }
+  const n = data.nodes.length;
+  SEA.nodes = data.nodes.map((node, i) => {
+    const angle = (i / Math.max(1, n)) * Math.PI * 2;
+    const radius = node.id === 'self_core' ? 0 : (node.layer === 'group' ? 110 : 185 + (i % 3) * 42);
+    return Object.assign({}, node, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, vx: 0, vy: 0 });
+  });
+  const byId = Object.fromEntries(SEA.nodes.map(x => [x.id, x]));
+  SEA.edges = data.edges.map(e => ({ source: byId[e.source], target: byId[e.target], relation: e.relation })).filter(e => e.source && e.target);
+  SEA.selected = SEA.nodes[0] || null;
+  if (SEA.selected) renderInspector(SEA.selected);
+  seaResetView();
+  startSeaLoop();
+}
+
+function seaZoom(factor) { SEA.zoom = Math.max(0.4, Math.min(2.6, SEA.zoom * factor)); }
+function seaResetView() { SEA.camX = 0; SEA.camY = 0; SEA.zoom = window.innerWidth < 768 ? 0.78 : 1.0; }
+
+document.querySelectorAll('#seaFilters .chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const l = btn.dataset.layer;
+    if (SEA.visibleLayers.has(l)) { SEA.visibleLayers.delete(l); btn.classList.remove('on'); }
+    else { SEA.visibleLayers.add(l); btn.classList.add('on'); }
+  });
+});
+
+function renderInspector(node) {
+  const rels = SEA.edges.filter(e => e.source.id === node.id || e.target.id === node.id)
+    .map(e => `<li>${e.source.id === node.id ? '→ ' + e.target.label : '← ' + e.source.label} <span style="color:#60a5fa">(${e.relation})</span></li>`).join('');
+  document.getElementById('seaInspector').innerHTML = `
+    <div style="margin-bottom:6px;"><span class="badge info">${LAYER_NAMES[node.layer] || node.layer}</span></div>
+    <h4>${node.label}</h4>
+    <p style="color:#cbd5e1;margin:0 0 8px;">${node.summary || ''}</p>
+    <div style="font-size:11.5px;color:#94a3b8;margin-bottom:6px;"><strong>记忆关联 (${SEA.edges.filter(e=>e.source.id===node.id||e.target.id===node.id).length})：</strong></div>
+    <ul style="margin:0 0 10px;padding-left:16px;color:#e2e8f0;">${rels || '<li>暂无关联</li>'}</ul>
+    <pre style="background:rgba(2,6,23,.65);padding:8px;border-radius:8px;overflow:auto;font-size:11px;color:#93c5fd;margin:0;">${JSON.stringify(node.detail || {}, null, 2)}</pre>
+  `;
+}
+
+function startSeaLoop() {
+  if (SEA.raf) cancelAnimationFrame(SEA.raf);
+  const canvas = document.getElementById('seaCanvas');
+  const ctx = canvas.getContext('2d');
+  const stars = Array.from({ length: 65 }, (_, i) => ({ x: (i * 137.5) % 1000 / 1000, y: (i * 293.3) % 1000 / 1000, r: 0.6 + (i % 3) * 0.6 }));
+
+  function step() {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
+        canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const W = rect.width, H = rect.height;
+      ctx.clearRect(0, 0, W, H);
+      SEA.tick += 0.015;
+
+      // Ambient starfield
+      for (const s of stars) {
+        ctx.fillStyle = `rgba(148,163,184,${0.18 + 0.15 * Math.sin(SEA.tick + s.x * 10)})`;
+        ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // Gentle force physics
+      const vis = SEA.nodes.filter(n => SEA.visibleLayers.has(n.layer));
+      for (let i = 0; i < vis.length; i++) {
+        const a = vis[i];
+        if (a === SEA.dragNode || a.id === 'self_core') continue;
+        a.vx += -a.x * 0.0008; a.vy += -a.y * 0.0008;
+        for (let j = i + 1; j < vis.length; j++) {
+          const b = vis[j];
+          const dx = a.x - b.x, dy = a.y - b.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          if (dist < 130) {
+            const f = (130 - dist) * 0.0035;
+            const fx = (dx / dist) * f, fy = (dy / dist) * f;
+            a.vx += fx; a.vy += fy;
+            if (b !== SEA.dragNode && b.id !== 'self_core') { b.vx -= fx; b.vy -= fy; }
+          }
+        }
+      }
+      for (const e of SEA.edges) {
+        if (!SEA.visibleLayers.has(e.source.layer) || !SEA.visibleLayers.has(e.target.layer)) continue;
+        const dx = e.target.x - e.source.x, dy = e.target.y - e.source.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const targetLen = 115;
+        const f = (dist - targetLen) * 0.0022;
+        const fx = (dx / dist) * f, fy = (dy / dist) * f;
+        if (e.source !== SEA.dragNode && e.source.id !== 'self_core') { e.source.vx += fx; e.source.vy += fy; }
+        if (e.target !== SEA.dragNode && e.target.id !== 'self_core') { e.target.vx -= fx; e.target.vy -= fy; }
+      }
+      for (const n of vis) {
+        if (n === SEA.dragNode || n.id === 'self_core') continue;
+        n.vx *= 0.86; n.vy *= 0.86; n.x += n.vx; n.y += n.vy;
+      }
+
+      ctx.save();
+      ctx.translate(W / 2 + SEA.camX, H / 2 + SEA.camY);
+      ctx.scale(SEA.zoom, SEA.zoom);
+
+      // Draw edges + animated synaptic pulse
+      for (const e of SEA.edges) {
+        if (!SEA.visibleLayers.has(e.source.layer) || !SEA.visibleLayers.has(e.target.layer)) continue;
+        const isPrivate = e.relation.includes('私密');
+        const hi = SEA.selected && (SEA.selected.id === e.source.id || SEA.selected.id === e.target.id);
+        ctx.strokeStyle = isPrivate ? 'rgba(244,63,94,0.55)' : (hi ? 'rgba(96,165,250,0.75)' : 'rgba(148,163,184,0.26)');
+        ctx.lineWidth = hi ? 1.8 : 1.1;
+        ctx.setLineDash(isPrivate ? [4, 4] : []);
+        ctx.beginPath(); ctx.moveTo(e.source.x, e.source.y); ctx.lineTo(e.target.x, e.target.y); ctx.stroke();
+        ctx.setLineDash([]);
+        // Synaptic pulse dot
+        const t = (SEA.tick * 0.35 + (e.source.x + e.target.y) * 0.002) % 1;
+        const px = e.source.x + (e.target.x - e.source.x) * (t < 0 ? t + 1 : t);
+        const py = e.source.y + (e.target.y - e.source.y) * (t < 0 ? t + 1 : t);
+        ctx.fillStyle = isPrivate ? '#fb7185' : '#93c5fd';
+        ctx.beginPath(); ctx.arc(px, py, 2.0, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // Draw glowing nodes
+      for (const n of vis) {
+        const col = LAYER_COLORS[n.layer] || '#60a5fa';
+        const sel = SEA.selected && SEA.selected.id === n.id;
+        const grad = ctx.createRadialGradient(n.x, n.y, 1, n.x, n.y, n.size * 1.9);
+        grad.addColorStop(0, col); grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 1.9, 0, Math.PI * 2); ctx.fill();
+
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 0.56, 0, Math.PI * 2); ctx.fill();
+        if (sel) {
+          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.2;
+          ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 0.78, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = (n.id === 'self_core' ? '700 12.5px' : '500 11.5px') + ' -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(n.label, n.x, n.y + n.size * 0.56 + 14);
+      }
+      ctx.restore();
+    }
+    SEA.raf = requestAnimationFrame(step);
+  }
+  step();
+}
+
+(function bindSeaPointer() {
+  const canvas = document.getElementById('seaCanvas');
+  function toWorld(clientX, clientY) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (clientX - r.left - r.width / 2 - SEA.camX) / SEA.zoom, y: (clientY - r.top - r.height / 2 - SEA.camY) / SEA.zoom };
+  }
+  function hitTest(wx, wy) {
+    return SEA.nodes.find(n => SEA.visibleLayers.has(n.layer) && Math.hypot(n.x - wx, n.y - wy) <= Math.max(18, n.size * 0.9));
+  }
+  canvas.addEventListener('pointerdown', (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    const w = toWorld(e.clientX, e.clientY);
+    const hit = hitTest(w.x, w.y);
+    SEA.lastX = e.clientX; SEA.lastY = e.clientY;
+    if (hit) { SEA.dragNode = hit; SEA.selected = hit; renderInspector(hit); }
+    else { SEA.panning = true; }
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (SEA.dragNode) {
+      const w = toWorld(e.clientX, e.clientY);
+      SEA.dragNode.x = w.x; SEA.dragNode.y = w.y; SEA.dragNode.vx = 0; SEA.dragNode.vy = 0;
+    } else if (SEA.panning) {
+      SEA.camX += e.clientX - SEA.lastX; SEA.camY += e.clientY - SEA.lastY;
+      SEA.lastX = e.clientX; SEA.lastY = e.clientY;
+    }
+  });
+  canvas.addEventListener('pointerup', () => { SEA.dragNode = null; SEA.panning = false; });
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); seaZoom(e.deltaY < 0 ? 1.1 : 0.91); }, { passive: false });
+})();
+
+/* --- Providers, Memory, Stickers, Persona, Perception, Ops, Alerts --- */
 async function loadProviders() {
   const data = await api('/api/providers');
-  document.getElementById('providerTable').innerHTML = data.items.length ? data.items.map(p=>`<tr><td><span class="badge info">${p.slot}</span></td><td>${p.role}</td><td><strong>${p.name}</strong><br><small>${p.model_name} · ${p.base_url}</small></td><td><code>${p.api_key_masked||'(空)'}</code></td><td><span class="badge ${p.last_health_status==='healthy'?'ok':(p.last_health_status==='error'?'err':'warn')}">${p.last_health_status}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="testProvider(${p.id})">测活</button><button class="btn sm danger" onclick="delProvider(${p.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="6">尚未配置模型路由</td></tr>';
+  document.getElementById('providerTable').innerHTML = data.items.length ? data.items.map(p=>`<tr>
+    <td><span class="badge info">${p.slot}</span></td>
+    <td><span class="badge purple">${p.protocol}</span><br><small>${p.role}</small></td>
+    <td><strong>${p.name}</strong><br><small>${p.model_name} · ${p.base_url}</small></td>
+    <td><code>${p.api_key_masked||'(空)'}</code></td>
+    <td><span class="badge ${p.last_health_status==='healthy'?'ok':(p.last_health_status==='error'?'err':'warn')}">${p.last_health_status}</span> ${p.last_health_ms ? p.last_health_ms+'ms' : ''}</td>
+    <td class="row-actions"><button class="btn sm secondary" onclick="testProvider(${p.id})">测活</button><button class="btn sm danger" onclick="delProvider(${p.id})">删除</button></td>
+  </tr>`).join('') : '<tr><td colspan="6">尚未配置模型路由</td></tr>';
 }
 document.getElementById('providerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  await api('/api/providers', { method: 'PUT', body: JSON.stringify({ slot: document.getElementById('pSlot').value, role: document.getElementById('pRole').value, name: document.getElementById('pName').value.trim(), base_url: document.getElementById('pUrl').value.trim(), model_name: document.getElementById('pModel').value.trim(), api_key: document.getElementById('pKey').value.trim(), price_input_per_1m: parseFloat(document.getElementById('pInPrice').value||'0'), price_output_per_1m: parseFloat(document.getElementById('pOutPrice').value||'0') }) });
-  document.getElementById('pKey').value = ''; toast('模型路由已加密保存'); loadProviders();
+  await api('/api/providers', { method: 'PUT', body: JSON.stringify({
+    slot: document.getElementById('pSlot').value, protocol: document.getElementById('pProto').value, role: document.getElementById('pRole').value,
+    name: document.getElementById('pName').value.trim(), base_url: document.getElementById('pUrl').value.trim(),
+    model_name: document.getElementById('pModel').value.trim(), api_key: document.getElementById('pKey').value.trim(),
+    price_input_per_1m: parseFloat(document.getElementById('pInPrice').value||'0'), price_output_per_1m: parseFloat(document.getElementById('pOutPrice').value||'0')
+  }) });
+  document.getElementById('pKey').value = ''; toast('模型路由已加密保存并热生效'); loadProviders();
 });
 async function testProvider(id) { const r = await api(`/api/providers/${id}/test`, { method: 'POST' }); toast(r.ok ? `测活成功 (${r.latency_ms}ms)` : `测活失败: ${r.error}`); loadProviders(); }
 async function delProvider(id) { await api(`/api/providers/${id}`, { method: 'DELETE' }); toast('已删除'); loadProviders(); }
+
 async function loadMemory() {
   const ids = await api('/api/memory/identities');
   document.getElementById('identityTable').innerHTML = ids.length ? ids.map(i=>`<tr><td><code>${i.qq_id}</code></td><td>${i.nickname||'-'}</td><td>${(i.known_names||[]).join(', ')}</td><td>${i.relationship_level}</td><td><button class="btn sm danger" onclick="forgetUser(${i.qq_id})">一键忘却</button></td></tr>`).join('') : '<tr><td colspan="5">暂无 QQ 身份</td></tr>';
@@ -305,6 +804,7 @@ async function loadMemory() {
   document.getElementById('ambientBox').innerHTML = amb.length ? amb.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>群 ${a.group_id}</strong> (${a.message_count}条)<div>${a.summary_text}</div></div>`).join('') : '暂无边缘旁听摘要';
 }
 async function forgetUser(qq) { if (!confirm(`确认连根清理 QQ ${qq} 的所有记忆与画像？`)) return; const r = await api('/api/memory/forget', { method: 'POST', body: JSON.stringify({ qq_id: qq, wipe_profile: true }) }); toast(`已清理消息 ${r.messages_deleted} 条`); loadMemory(); }
+
 async function loadStickers() {
   const list = await api('/api/stickers');
   document.getElementById('stickerTable').innerHTML = list.length ? list.map(s=>`<tr><td><code>${s.phash}</code><br><small>${s.origin} · ${s.source_url||s.file_path}</small></td><td>${(s.emotion_tags||[]).join(', ')}</td><td>出现 ${s.appearance_count} / 反应 ${s.positive_reactions}</td><td><span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${s.status}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="reviewSticker(${s.id},'approved')">通过</button><button class="btn sm danger" onclick="delSticker(${s.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="5">暂无表情包</td></tr>';
@@ -317,6 +817,7 @@ async function importStickers() {
 }
 async function reviewSticker(id, status) { await api(`/api/stickers/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); loadStickers(); }
 async function delSticker(id) { await api(`/api/stickers/${id}`, { method: 'DELETE' }); loadStickers(); }
+
 async function loadPersona() {
   const list = await api('/api/persona/versions');
   document.getElementById('personaList').innerHTML = list.map(p=>`<div style="padding:10px 0;border-bottom:1px solid var(--border);"><strong>${p.version_tag} · ${p.bot_name}</strong> ${p.is_active?'<span class="badge ok">生效中</span>':''}<div style="font-size:12px;color:var(--ink2)">别名：${(p.aliases||[]).join(' / ')}</div><div>${p.system_prompt}</div></div>`).join('');
@@ -327,6 +828,7 @@ async function runSandbox() {
   const res = await api('/api/persona/sandbox/replay', { method: 'POST', body: JSON.stringify({ messages, override_soft_entry_threshold: parseFloat(document.getElementById('simThreshold').value||'0.78') }) });
   document.getElementById('simResult').textContent = JSON.stringify(res.results, null, 2);
 }
+
 async function loadPerception() {
   const [b, sched] = await Promise.all([api('/api/ops/briefings/latest'), api('/api/ops/schedule')]);
   document.getElementById('briefingBox').textContent = b.digest_text || '暂无今日刷网简报';
@@ -334,19 +836,22 @@ async function loadPerception() {
 }
 async function refreshBriefing() { const r = await api('/api/ops/briefings/refresh', { method: 'POST' }); toast(r.ok ? '简报已更新' : r.message); loadPerception(); }
 async function syncSchedule() { const r = await api('/api/ops/schedule/sync', { method: 'POST', body: '{}' }); toast(`状态已更新：${r.current_activity} (${r.mood})`); }
+
 async function loadOps() {
   const [pl, bk] = await Promise.all([api('/api/ops/plugins'), api('/api/ops/backups')]);
   document.getElementById('pluginList').innerHTML = pl.loaded_plugins.map(p=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>${p.name}</strong> v${p.version} (超时 ${p.timeout_seconds}s)<div style="font-size:12px;color:var(--ink2)">${p.description}</div></div>`).join('');
   document.getElementById('backupList').innerHTML = bk.length ? bk.map(b=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>${b.filename}</strong> → ${b.remote_target} <span class="badge ${b.status==='success'?'ok':'err'}">${b.status}</span></div>`).join('') : '暂无备份记录';
 }
-async function runReflection() { const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' }); toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}，新黑话 ${r.slang_discovered}`); }
+async function runReflection() { const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' }); toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}`); }
 async function triggerBackup() { await api('/api/ops/backups/trigger', { method: 'POST', body: '{}' }); toast('已触发备份钩子'); loadOps(); }
+
 async function loadAlerts() {
   const [chs, evs] = await Promise.all([api('/api/alerts/channels'), api('/api/alerts/events')]);
-  document.getElementById('alertList').innerHTML = `<p><strong>通道 (${chs.length})：</strong> ${chs.map(c=>`<span class="badge info">${c.channel_type}:${c.name}</span>`).join(' ')||'暂无'}</p><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${e.severity}</span></td><td>${e.category}</td><td>${e.title}</td><td>${e.created_at}</td></tr>`).join('')||'<tr><td colspan="4">暂无告警</td></tr>'}</tbody></table>`;
+  document.getElementById('alertList').innerHTML = `<p><strong>通道 (${chs.length})：</strong> ${chs.map(c=>`<span class="badge info">${c.channel_type}:${c.name}</span>`).join(' ')||'暂无'}</p><div class="table-wrap"><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${e.severity}</span></td><td>${e.category}</td><td>${e.title}</td><td>${e.created_at}</td></tr>`).join('')||'<tr><td colspan="4">暂无告警</td></tr>'}</tbody></table></div>`;
 }
 document.getElementById('alertForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/alerts/channels', { method: 'POST', body: JSON.stringify({ channel_type: document.getElementById('aType').value, name: document.getElementById('aName').value.trim(), config: JSON.parse(document.getElementById('aConfig').value) }) }); toast('告警通道已加密保存'); loadAlerts(); });
-async function sendTestAlert() { const r = await api('/api/alerts/test', { method: 'POST' }); toast('测试告警已发送'); loadAlerts(); }
+async function sendTestAlert() { await api('/api/alerts/test', { method: 'POST' }); toast('测试告警已发送'); loadAlerts(); }
+
 (async () => { if (TOKEN) { try { const me = await api('/api/auth/me'); enterApp(me.username); } catch { logout(); } } })();
 </script>
 </body>

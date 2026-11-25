@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "Companion System"
-    app_version: str = "1.0.0"
+    app_version: str = "1.1.0"
     environment: str = "production"
     log_level: str = "INFO"
 
@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     snowluma_ws_url: str = "ws://snowluma:3001/"
     snowluma_http_url: str = "http://snowluma:3000"
     snowluma_access_token: str = ""
-    snowluma_http_access_token: str = ""
     bot_qq: int = 0
     admin_qq: int = 0
 

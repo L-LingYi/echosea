@@ -42,12 +42,10 @@ class SnowLumaAdapter:
         http_url: str = "http://snowluma:3000",
         access_token: str = "",
         bot_qq: int = 0,
-        http_access_token: str = "",
     ) -> None:
         self.ws_url = ws_url
         self.http_url = http_url.rstrip("/")
         self.access_token = access_token
-        self.http_access_token = http_access_token
         self.bot_qq = bot_qq
 
         self._reverse_ws: WebSocket | None = None
@@ -90,16 +88,6 @@ class SnowLumaAdapter:
                 fut.set_result(data)
             return True
         return False
-
-    async def _send_http(self, action: str, params: dict[str, Any]) -> None:
-        headers = {"Authorization": f"Bearer {self.http_access_token or self.access_token}"}
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(f"{self.http_url}/{action}", headers=headers, json=params)
-            response.raise_for_status()
-            result = response.json()
-        if result.get("retcode") != 0 or (result.get("data") or {}).get("message_id") is None:
-            raise RuntimeError(f"SnowLuma rejected {action}: retcode={result.get('retcode')}")
-        logger.info("SnowLuma accepted %s: message_id=%s", action, result["data"]["message_id"])
 
     async def normalize_event(
         self,
@@ -169,21 +157,11 @@ class SnowLumaAdapter:
 
         # Auto-expand quoted message content from DB if reply_to_msg_id is present
         expanded_reply_text: str | None = None
-        quoted_text: str | None = None
-        quoted_sender_qq: int | None = None
         if reply_to_msg_id and session is not None:
-            scope = ChatMessage.group_id == group_id if msg_type == "group" else ChatMessage.sender_qq == sender_qq
-            stmt = select(ChatMessage).where(
-                ChatMessage.message_id == reply_to_msg_id,
-                ChatMessage.scene == msg_type,
-                ChatMessage.is_recalled.is_(False),
-                scope,
-            ).limit(1)
+            stmt = select(ChatMessage).where(ChatMessage.message_id == reply_to_msg_id).limit(1)
             quoted = (await session.execute(stmt)).scalar_one_or_none()
             if quoted is not None:
-                quoted_text = quoted.raw_text
-                quoted_sender_qq = quoted.sender_qq
-                expanded_reply_text = f"{quoted.sender_display_name}: {quoted_text}"
+                expanded_reply_text = f"{quoted.sender_display_name}: {quoted.raw_text}"
 
         return MessageEnvelope(
             message_id=message_id,
@@ -195,8 +173,6 @@ class SnowLumaAdapter:
             raw_text=raw_text,
             reply_to_msg_id=reply_to_msg_id,
             expanded_reply_text=expanded_reply_text,
-            quoted_text=quoted_text,
-            quoted_sender_qq=quoted_sender_qq,
             mentioned_qqs=list(dict.fromkeys(mentioned_qqs)),
             mentions_all=mentions_all,
             media_meta=media_meta,
@@ -238,11 +214,7 @@ class SnowLumaAdapter:
         frame = {"action": action, "params": params, "echo": echo}
 
         try:
-            if self.http_url and self.http_access_token:
-                await self._send_http(action, params)
-                delivery.status = "sent"
-                delivery.sent_at = datetime.now(timezone.utc)
-            elif self._reverse_ws is not None:
+            if self._reverse_ws is not None:
                 await self._reverse_ws.send_text(json.dumps(frame, ensure_ascii=False))
                 delivery.status = "sent"
                 delivery.sent_at = datetime.now(timezone.utc)
@@ -251,7 +223,12 @@ class SnowLumaAdapter:
                 delivery.status = "sent"
                 delivery.sent_at = datetime.now(timezone.utc)
             elif self.http_url and self.http_url.startswith("http"):
-                await self._send_http(action, params)
+                headers = {}
+                if self.access_token:
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    resp = await client.post(f"{self.http_url}/{action}", headers=headers, json=params)
+                    resp.raise_for_status()
                 delivery.status = "sent"
                 delivery.sent_at = datetime.now(timezone.utc)
             else:
@@ -303,10 +280,7 @@ class SnowLumaAdapter:
                         if data.get("post_type") == "meta_event":
                             self.record_heartbeat()
                             continue
-                        try:
-                            await on_event(data)
-                        except Exception:
-                            logger.exception("Failed to process SnowLuma event")
+                        await on_event(data)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -348,9 +322,7 @@ class SnowLumaAdapter:
         )
         frame = {"action": action, "params": params, "echo": echo}
         try:
-            if self.http_url and self.http_access_token:
-                await self._send_http(action, params)
-            elif self._reverse_ws is not None:
+            if self._reverse_ws is not None:
                 await self._reverse_ws.send_text(json.dumps(frame, ensure_ascii=False))
             elif self._forward_ws is not None:
                 await self._forward_ws.send(json.dumps(frame, ensure_ascii=False))
@@ -391,9 +363,7 @@ class SnowLumaAdapter:
         )
         frame = {"action": action, "params": params, "echo": echo}
         try:
-            if self.http_url and self.http_access_token:
-                await self._send_http(action, params)
-            elif self._reverse_ws is not None:
+            if self._reverse_ws is not None:
                 await self._reverse_ws.send_text(json.dumps(frame, ensure_ascii=False))
             elif self._forward_ws is not None:
                 await self._forward_ws.send(json.dumps(frame, ensure_ascii=False))

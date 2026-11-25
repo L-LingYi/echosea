@@ -198,6 +198,8 @@ class OutboxDelivery(Base):
     reply_to_msg_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload_text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    onebot_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
     onebot_echo: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -217,6 +219,8 @@ class UsageMetric(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     ttft_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source: Mapped[str] = mapped_column(String(24), default="production", nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
@@ -286,6 +290,9 @@ class TTSDelivery(Base):
     emotion: Mapped[str] = mapped_column(String(32), default="neutral", nullable=False)
     speed_ratio: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     duration_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    synthesis_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    onebot_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)  # sent | fallback_text | failed
     fallback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     onebot_echo: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -335,4 +342,24 @@ class BackupRecord(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="success", nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class PipelineTrace(Base):
+    """Privacy-safe per-stage trace sharing a unified request_id (no raw chat body logged)."""
+
+    __tablename__ = "pipeline_traces"
+    __table_args__ = (
+        Index("ix_pipeline_traces_req", "request_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scene: Mapped[str] = mapped_column(String(16), nullable=False)
+    group_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)  # inbound | gatekeeper | main_brain | tts | onebot | recall
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meta_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

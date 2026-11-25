@@ -1,5 +1,8 @@
-"""Unified Model Control Center: 6 standard slots, Primary+Fallback failover, AES-GCM keys,
-health probe, telemetry metrics, and Daily Budget Hard Circuit Breaker (80% alert / 100% fuse).
+"""Unified Model Control Center (v1.1):
+- 6 standard slots, Primary+Fallback failover, AES-GCM encrypted keys.
+- Native TypeSafe AI Jev System One (`typesafe_systemone` -> POST /v1/systemone) support for Gatekeeper!
+- Separates UsageMetric `source` ('production' | 'probe' | 'reflection' | 'sandbox') so probes never pollute stats.
+- Auto-updates provider `last_health_status = 'healthy'` on successful live calls.
 """
 from __future__ import annotations
 
@@ -47,12 +50,14 @@ class ModelHubService:
         budget_alert_ratio: float = 0.8,
         http_caller: Callable[[ModelProvider, str, list[dict[str, Any]], float, int], Awaitable[dict[str, Any]]]
         | None = None,
+        systemone_caller: Callable[[ModelProvider, str, str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.master_key = master_key
         self.alert_service = alert_service
         self.daily_budget_usd = daily_budget_usd
         self.budget_alert_ratio = budget_alert_ratio
         self._http_caller = http_caller
+        self._systemone_caller = systemone_caller
         self._consecutive_failures: dict[str, int] = {}
 
     async def upsert_provider(self, session: AsyncSession, data: dict[str, Any]) -> ModelProvider:
@@ -128,7 +133,8 @@ class ModelHubService:
         now = datetime.now(timezone.utc)
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         stmt = select(func.coalesce(func.sum(UsageMetric.estimated_cost_usd), 0.0)).where(
-            UsageMetric.created_at >= start_of_day
+            UsageMetric.created_at >= start_of_day,
+            UsageMetric.source != "probe",
         )
         total = (await session.execute(stmt)).scalar_one()
         return float(total or 0.0)
@@ -146,12 +152,14 @@ class ModelHubService:
         messages: list[dict[str, Any]],
         temperature: float = 0.7,
         max_tokens: int = 400,
+        source: str = "production",
+        request_id: str | None = None,
     ) -> ChatCompletionResult:
         """Invoke primary provider for slot; seamlessly failover to fallback provider on error."""
         stmt = (
             select(ModelProvider)
             .where(ModelProvider.slot == slot, ModelProvider.is_enabled.is_(True))
-            .order_by(ModelProvider.role.desc())  # 'primary' > 'fallback' alphabetically
+            .order_by(ModelProvider.role.desc())
         )
         providers = list((await session.execute(stmt)).scalars().all())
         if not providers:
@@ -184,6 +192,11 @@ class ModelHubService:
                 if choices:
                     content = choices[0].get("message", {}).get("content", "") or ""
 
+                # Auto-refresh provider health on live success (fixes 'unknown' status in diagnostics!)
+                provider.last_health_status = "healthy"
+                provider.last_health_ms = elapsed_ms
+                provider.last_checked_at = datetime.now(timezone.utc)
+
                 metric = UsageMetric(
                     slot=slot,
                     provider_name=provider.name,
@@ -194,13 +207,16 @@ class ModelHubService:
                     estimated_cost_usd=cost,
                     ttft_ms=elapsed_ms,
                     total_ms=elapsed_ms,
+                    source=source,
+                    request_id=request_id,
                     success=True,
                 )
                 session.add(metric)
                 await session.flush()
 
                 self._consecutive_failures[slot] = 0
-                await self._check_budget_alerts(session)
+                if source == "production":
+                    await self._check_budget_alerts(session)
 
                 return ChatCompletionResult(
                     content=content.strip(),
@@ -224,12 +240,13 @@ class ModelHubService:
                         provider_name=provider.name,
                         model_name=provider.model_name,
                         total_ms=elapsed_ms,
+                        source=source,
+                        request_id=request_id,
                         success=False,
                     )
                 )
                 await session.flush()
 
-        # Both primary and fallback failed
         self._consecutive_failures[slot] = self._consecutive_failures.get(slot, 0) + 1
         if self._consecutive_failures[slot] >= 3:
             await self.alert_service.notify(
@@ -241,8 +258,128 @@ class ModelHubService:
             )
         raise RuntimeError(f"All providers failed for slot '{slot}': {last_err}")
 
+    async def evaluate_gatekeeper_slot(
+        self,
+        session: AsyncSession,
+        state_text: str,
+        default_target: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Invoke configured 'gatekeeper' slot: natively supports TypeSafe AI Jev (`typesafe_systemone`)
+        or standard `openai_compatible` fallback. Returns {'target': ..., 'score': ..., 'reason': ...} or None.
+        """
+        stmt = (
+            select(ModelProvider)
+            .where(ModelProvider.slot == "gatekeeper", ModelProvider.is_enabled.is_(True))
+            .order_by(ModelProvider.role.desc())
+        )
+        providers = list((await session.execute(stmt)).scalars().all())
+        if not providers:
+            return None
+
+        questions = {
+            "target": {
+                "type": "enum",
+                "options": ["bot", "other_user", "third_person_about_bot", "group_open"],
+                "instructions": "Classify who this group chat message is addressed to.",
+            },
+            "should_chime_in": {
+                "type": "boolean",
+                "instructions": "Would a brief witty reply or banter from the companion bot feel natural and non-intrusive here?",
+            },
+        }
+
+        for provider in providers:
+            api_key = decrypt_secret(provider.api_key_enc, self.master_key)
+            t0 = time.perf_counter()
+            try:
+                if provider.protocol == "typesafe_systemone":
+                    if self._systemone_caller is not None:
+                        raw = await self._systemone_caller(provider, api_key, state_text, questions)
+                    else:
+                        raw = await self._call_typesafe_systemone(provider, api_key, state_text, questions)
+                    parsed = self._parse_jev_response(raw, default_target)
+                    usage = raw.get("usage") or {}
+                    p_tok = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+                else:
+                    # OpenAI-compatible JSON gatekeeper fallback
+                    import json as _json
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": '你是群聊门卫，仅输出 JSON：{"target":"bot|other_user|third_person_about_bot|group_open","score":0.0-1.0,"reason":"简短原因"}',
+                        },
+                        {"role": "user", "content": state_text},
+                    ]
+                    if self._http_caller is not None:
+                        raw = await self._http_caller(provider, api_key, messages, 0.1, 100)
+                    else:
+                        raw = await self._call_openai_compatible(provider, api_key, messages, 0.1, 100)
+                    txt = raw.get("choices", [{}])[0].get("message", {}).get("content", "{}")
+                    parsed = _json.loads(txt)
+                    p_tok = int((raw.get("usage") or {}).get("prompt_tokens", 0))
+
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                provider.last_health_status = "healthy"
+                provider.last_health_ms = elapsed_ms
+                provider.last_checked_at = datetime.now(timezone.utc)
+                cost = (p_tok / 1_000_000.0) * provider.price_input_per_1m
+                session.add(
+                    UsageMetric(
+                        slot="gatekeeper",
+                        provider_name=provider.name,
+                        model_name=provider.model_name,
+                        prompt_tokens=p_tok,
+                        estimated_cost_usd=cost,
+                        ttft_ms=elapsed_ms,
+                        total_ms=elapsed_ms,
+                        source="production",
+                        request_id=request_id,
+                        success=True,
+                    )
+                )
+                await session.flush()
+                return parsed
+            except Exception as exc:
+                logger.warning("Gatekeeper provider '%s' (%s) failed: %s", provider.name, provider.protocol, exc)
+                continue
+        return None
+
+    @staticmethod
+    def _parse_jev_response(raw: dict[str, Any], default_target: str) -> dict[str, Any]:
+        """Extract calibrated target and chime-in probability from TypeSafe System One response."""
+        answers = raw.get("answers") or raw.get("results") or raw
+        target_ans = answers.get("target")
+        chime_ans = answers.get("should_chime_in")
+
+        target = default_target
+        if isinstance(target_ans, dict):
+            target = str(target_ans.get("value") or default_target)
+        elif isinstance(target_ans, str):
+            target = target_ans
+
+        score = 0.35
+        if isinstance(chime_ans, dict):
+            val = chime_ans.get("value")
+            probs = chime_ans.get("probabilities") or {}
+            if "true" in probs or True in probs:
+                score = float(probs.get("true", probs.get(True, 0.5)))
+            elif "confidence" in chime_ans:
+                conf = float(chime_ans["confidence"])
+                score = conf if val else (1.0 - conf)
+            else:
+                score = 0.85 if val else 0.2
+        elif isinstance(chime_ans, bool):
+            score = 0.85 if chime_ans else 0.2
+
+        return {
+            "target": target,
+            "score": round(max(0.0, min(1.0, score)), 3),
+            "reason": f"Jev System One (target={target}, p={score:.2f})",
+        }
+
     async def probe_provider(self, session: AsyncSession, provider_id: int) -> dict[str, Any]:
-        """One-click live health check for a configured provider slot."""
+        """One-click live health check tagged with source='probe' (excluded from prod stats)."""
         provider = await session.get(ModelProvider, provider_id)
         if provider is None:
             raise ValueError("Provider not found")
@@ -250,29 +387,35 @@ class ModelHubService:
         api_key = decrypt_secret(provider.api_key_enc, self.master_key)
         t0 = time.perf_counter()
         try:
-            if self._http_caller is not None:
-                res = await self._http_caller(
-                    provider,
-                    api_key,
-                    [{"role": "user", "content": "ping"}],
-                    0.0,
-                    16,
-                )
+            if provider.protocol == "typesafe_systemone":
+                q = {"is_ping": {"type": "boolean", "instructions": "Is this a ping health check?"}}
+                if self._systemone_caller is not None:
+                    res = await self._systemone_caller(provider, api_key, "ping", q)
+                else:
+                    res = await self._call_typesafe_systemone(provider, api_key, "ping", q)
+                reply = str(res.get("answers", res))[:80]
+            elif self._http_caller is not None:
+                res = await self._http_caller(provider, api_key, [{"role": "user", "content": "ping"}], 0.0, 16)
                 reply = res.get("choices", [{}])[0].get("message", {}).get("content", "ok")
             else:
-                res = await self._call_openai_compatible(
-                    provider,
-                    api_key,
-                    [{"role": "user", "content": "Reply with OK"}],
-                    0.0,
-                    16,
-                )
+                res = await self._call_openai_compatible(provider, api_key, [{"role": "user", "content": "Reply OK"}], 0.0, 16)
                 reply = res.get("choices", [{}])[0].get("message", {}).get("content", "OK")
 
             ms = int((time.perf_counter() - t0) * 1000)
             provider.last_health_status = "healthy"
             provider.last_health_ms = ms
             provider.last_checked_at = datetime.now(timezone.utc)
+            session.add(
+                UsageMetric(
+                    slot=provider.slot,
+                    provider_name=provider.name,
+                    model_name=provider.model_name,
+                    ttft_ms=ms,
+                    total_ms=ms,
+                    source="probe",
+                    success=True,
+                )
+            )
             await session.flush()
             return {"ok": True, "latency_ms": ms, "sample_reply": str(reply)[:80]}
         except Exception as exc:
@@ -280,6 +423,16 @@ class ModelHubService:
             provider.last_health_status = "error"
             provider.last_health_ms = ms
             provider.last_checked_at = datetime.now(timezone.utc)
+            session.add(
+                UsageMetric(
+                    slot=provider.slot,
+                    provider_name=provider.name,
+                    model_name=provider.model_name,
+                    total_ms=ms,
+                    source="probe",
+                    success=False,
+                )
+            )
             await session.flush()
             return {"ok": False, "latency_ms": ms, "error": str(exc)}
 
@@ -314,7 +467,7 @@ class ModelHubService:
         max_tokens: int,
     ) -> dict[str, Any]:
         url = f"{provider.base_url.rstrip('/')}/chat/completions"
-        headers = {"Content-Type": "application/json", **(provider.extra_config or {}).get("headers", {})}
+        headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = {
@@ -322,6 +475,29 @@ class ModelHubService:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+        }
+        async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            return resp.json()
+
+    @staticmethod
+    async def _call_typesafe_systemone(
+        provider: ModelProvider,
+        api_key: str,
+        state_text: str,
+        questions: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Native TypeSafe AI System One endpoint: POST /v1/systemone."""
+        base = provider.base_url.rstrip("/")
+        url = base if base.endswith("/systemone") else f"{base}/v1/systemone"
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "model": provider.model_name,
+            "state": state_text,
+            "questions": questions,
         }
         async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
             resp = await client.post(url, headers=headers, json=payload)

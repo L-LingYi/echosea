@@ -18,8 +18,6 @@ class MessageEnvelope(BaseModel):
     raw_text: str = ""
     reply_to_msg_id: str | None = None
     expanded_reply_text: str | None = None
-    quoted_text: str | None = None
-    quoted_sender_qq: int | None = None
     mentioned_qqs: list[int] = Field(default_factory=list)
     mentions_all: bool = False
     media_meta: list[dict[str, Any]] = Field(default_factory=list)

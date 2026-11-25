@@ -1,13 +1,10 @@
-"""Doubao (Volcengine) TTS Voice Pipeline:
-- 3 explicit user voice intents: answer_voice, read_quote, force_text.
-- Single-segment merged synthesis for coherent tone.
-- Pre-TTS cleaning (strips Markdown, URLs, parenthetical stage directions).
-- Emotion-to-speed mapping, max duration guard, timeout fallback to text, full receipt logging.
+"""Doubao (Volcengine) TTS Voice Pipeline (v1.1):
+- Separates `synthesis_status` (synthesized / fallback_text) from `onebot_status` (pending / accepted / failed).
+- Correlates with unified `request_id` and OneBot `onebot_echo` receipt.
 """
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import re
 import uuid
@@ -44,7 +41,7 @@ def detect_voice_intent(text: str, has_reply_quote: bool = False) -> str:
         return "force_text"
     if has_reply_quote and any(k in t for k in ("用语音", "读一下", "念一下", "朗读")):
         return "read_quote"
-    if any(k in t for k in ("用语音", "发语音", "语音说", "语音回复")):
+    if any(k in t for k in ("用语音回答", "发语音", "语音说", "语音回复")):
         return "answer_voice"
     return "default"
 
@@ -79,13 +76,14 @@ class DoubaoTTSService:
         text: str,
         intent: str = "answer_voice",
         emotion: str = "neutral",
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         cleaned = clean_text_for_tts(text)
         speed = EMOTION_SPEED_MAP.get(emotion, 1.0)
-        # Estimate rough duration (~4.2 Chinese chars/sec) for duration guard
         est_duration = round(max(1.0, len(cleaned) / (4.2 * speed)), 2)
 
         delivery = TTSDelivery(
+            request_id=request_id,
             scene=scene,
             target_id=target_id,
             intent=intent,
@@ -93,12 +91,16 @@ class DoubaoTTSService:
             emotion=emotion,
             speed_ratio=speed,
             duration_seconds=est_duration,
+            synthesis_status="pending",
+            onebot_status="pending",
             status="pending",
         )
         session.add(delivery)
         await session.flush()
 
         if not cleaned or est_duration > self.max_duration_seconds:
+            delivery.synthesis_status = "fallback_text"
+            delivery.onebot_status = "skipped"
             delivery.status = "fallback_text"
             delivery.fallback_reason = (
                 "empty_cleaned_text" if not cleaned else f"exceeded_max_duration_{self.max_duration_seconds}s"
@@ -106,7 +108,6 @@ class DoubaoTTSService:
             await session.flush()
             return {"ok": False, "delivery_id": delivery.id, "fallback_text": text, "reason": delivery.fallback_reason}
 
-        # Look up TTS slot from Model Control Center
         stmt = (
             select(ModelProvider)
             .where(ModelProvider.slot == "tts", ModelProvider.is_enabled.is_(True))
@@ -114,6 +115,8 @@ class DoubaoTTSService:
         )
         provider = (await session.execute(stmt)).scalars().first()
         if provider is None and self._synthesizer is None:
+            delivery.synthesis_status = "fallback_text"
+            delivery.onebot_status = "skipped"
             delivery.status = "fallback_text"
             delivery.fallback_reason = "tts_provider_not_configured"
             await session.flush()
@@ -128,13 +131,17 @@ class DoubaoTTSService:
                 audio_bytes, actual_duration = await self._call_doubao_api(provider, token, cleaned, emotion, speed)
 
             if actual_duration > self.max_duration_seconds:
+                delivery.synthesis_status = "fallback_text"
+                delivery.onebot_status = "skipped"
                 delivery.status = "fallback_text"
                 delivery.fallback_reason = f"audio_too_long_{actual_duration:.1f}s"
                 await session.flush()
                 return {"ok": False, "delivery_id": delivery.id, "fallback_text": text, "reason": delivery.fallback_reason}
 
             delivery.duration_seconds = actual_duration
-            delivery.status = "sent"
+            delivery.synthesis_status = "synthesized"
+            delivery.onebot_status = "pending"
+            delivery.status = "synthesized"
             await session.flush()
             return {
                 "ok": True,
@@ -142,13 +149,31 @@ class DoubaoTTSService:
                 "audio_b64": base64.b64encode(audio_bytes).decode("ascii"),
                 "duration_seconds": actual_duration,
                 "cleaned_text": cleaned,
+                "synthesis_status": "synthesized",
             }
         except Exception as exc:
             logger.warning("Doubao TTS failed, falling back to text: %s", exc)
+            delivery.synthesis_status = "failed"
+            delivery.onebot_status = "skipped"
             delivery.status = "fallback_text"
             delivery.fallback_reason = str(exc)
             await session.flush()
             return {"ok": False, "delivery_id": delivery.id, "fallback_text": text, "reason": str(exc)}
+
+    async def mark_onebot_receipt(
+        self,
+        session: AsyncSession,
+        delivery_id: int,
+        onebot_echo: str,
+        accepted: bool,
+    ) -> None:
+        """Record OneBot acceptance status separately from TTS synthesis status."""
+        row = await session.get(TTSDelivery, delivery_id)
+        if row is not None:
+            row.onebot_echo = onebot_echo
+            row.onebot_status = "accepted" if accepted else "failed"
+            row.status = "sent" if accepted else "failed"
+            await session.flush()
 
     @staticmethod
     async def _call_doubao_api(
@@ -159,44 +184,6 @@ class DoubaoTTSService:
         speed: float,
     ) -> tuple[bytes, float]:
         extra = provider.extra_config or {}
-        if "/api/v3/tts/" in provider.base_url:
-            headers = {
-                "X-Api-Key": api_key,
-                "X-Api-Resource-Id": extra.get("cluster", "seed-icl-2.0"),
-                "X-Api-Request-Id": str(uuid.uuid4()),
-            }
-            payload = {
-                "user": {"uid": "companion_bot"},
-                "req_params": {
-                    "text": cleaned_text,
-                    "speaker": provider.model_name,
-                    "audio_params": {
-                        "format": "mp3",
-                        "sample_rate": 24000,
-                        "loudness_rate": int(extra.get("loudness_rate", 0)),
-                        "speech_rate": max(-50, min(100, round((extra.get("speed_ratio", speed) - 1) * 100))),
-                    },
-                },
-            }
-            audio = bytearray()
-            async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
-                async with client.stream("POST", provider.base_url, headers=headers, json=payload) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        line = line.strip().removeprefix("data:").strip()
-                        if line == "[DONE]":
-                            break
-                        if not line or line.startswith(("event:", ":")):
-                            continue
-                        chunk = json.loads(line)
-                        if chunk.get("code", 0) not in (0, 20000000):
-                            raise RuntimeError(f"Volcengine V3 TTS returned code {chunk['code']}")
-                        if chunk.get("data"):
-                            audio.extend(base64.b64decode(chunk["data"], validate=True))
-            if not audio:
-                raise RuntimeError("Volcengine V3 TTS returned no audio")
-            return bytes(audio), len(cleaned_text) / (4.2 * speed)
-
         payload = {
             "app": {
                 "appid": extra.get("appid", ""),

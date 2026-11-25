@@ -43,6 +43,7 @@ def create_app(
     tts_synthesizer=None,
     feed_fetcher=None,
     search_caller=None,
+    systemone_caller=None,
 ) -> FastAPI:
     settings = settings_override or get_settings()
 
@@ -56,6 +57,16 @@ def create_app(
         db_mgr = DatabaseManager()
         db_mgr.init(settings.database_url)
         await db_mgr.create_all()
+        # Safe idempotent PostgreSQL live-upgrade guard (v1.1.0)
+        if settings.database_url.startswith("postgresql"):
+            from sqlalchemy import text as _sql_text
+            mig_path = Path(__file__).resolve().parents[2] / "db" / "migrations_v1_1.sql"
+            if mig_path.exists():
+                async with db_mgr.engine.begin() as conn:
+                    for stmt in mig_path.read_text(encoding="utf-8").split(";"):
+                        s = stmt.strip()
+                        if s and not s.startswith("--"):
+                            await conn.execute(_sql_text(s))
         app.state.db_manager = db_mgr
 
         # Seed default admin user if table is empty
@@ -91,13 +102,13 @@ def create_app(
             daily_budget_usd=settings.daily_budget_usd,
             budget_alert_ratio=settings.budget_alert_ratio,
             http_caller=http_caller,
+            systemone_caller=systemone_caller,
         )
         adapter = SnowLumaAdapter(
             ws_url=settings.snowluma_ws_url,
             http_url=settings.snowluma_http_url,
             access_token=settings.snowluma_access_token,
             bot_qq=settings.bot_qq,
-            http_access_token=settings.snowluma_http_access_token,
         )
         multimodal_service = MultimodalService()
         sticker_service = StickerService()

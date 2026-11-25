@@ -1,7 +1,5 @@
 -- Phase 2 & Phase 3 Extension Tables (appended to Companion System v1.0 Schema)
 
-ALTER TABLE memory_episodes ADD COLUMN IF NOT EXISTS embedding_json JSONB;
-
 -- 12. Multimodal Perceptual Hash Vision Cache
 CREATE TABLE IF NOT EXISTS image_vision_cache (
     id              BIGSERIAL PRIMARY KEY,
