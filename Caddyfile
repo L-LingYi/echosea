@@ -1,0 +1,4 @@
+# Replace with your actual domain to enable automatic HTTPS via Let's Encrypt
+{$COMPANION_DOMAIN::80} {
+    reverse_proxy companion-core:8000
+}

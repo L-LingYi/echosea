@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Companion System v1.0 · 全功能云端总控台</title>
+<style>
+  :root {
+    --bg: #f8fafc; --card: #ffffff; --ink: #0f172a; --ink2: #475569;
+    --border: #e2e8f0; --accent: #2563eb; --accent-dark: #1d4ed8;
+    --ok: #059669; --warn: #d97706; --danger: #dc2626;
+    --sidebar: #0f172a; --sidebar-ink: #cbd5e1;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; }
+  .hidden { display: none !important; }
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); padding: 20px; }
+  .login-card { width: 100%; max-width: 390px; background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 20px 50px rgba(15,23,42,.35); }
+  .login-card h1 { margin: 0 0 6px; font-size: 22px; }
+  .login-card p { margin: 0 0 22px; color: var(--ink2); font-size: 13px; }
+  .app { display: flex; min-height: 100vh; }
+  .sidebar { width: 232px; background: var(--sidebar); color: var(--sidebar-ink); padding: 20px 14px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+  .brand { color: #fff; font-weight: 700; font-size: 16px; padding: 8px 12px 16px; border-bottom: 1px solid #1e293b; margin-bottom: 8px; }
+  .brand small { display: block; color: #94a3b8; font-weight: 400; font-size: 12px; margin-top: 2px; }
+  .nav-btn { background: transparent; border: 0; color: var(--sidebar-ink); text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; transition: .15s; }
+  .nav-btn:hover { background: #1e293b; color: #fff; }
+  .nav-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+  .sidebar-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid #1e293b; font-size: 12px; }
+  .main { flex: 1; padding: 28px 32px; overflow-x: auto; }
+  .page-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; gap: 12px; }
+  .page-head h2 { margin: 0; font-size: 22px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; }
+  .kpi-label { color: var(--ink2); font-size: 12px; margin-bottom: 6px; }
+  .kpi-val { font-size: 24px; font-weight: 700; }
+  .kpi-sub { color: var(--ink2); font-size: 12px; margin-top: 4px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.ok { background: #dcfce7; color: #166534; }
+  .badge.warn { background: #fef3c7; color: #92400e; }
+  .badge.err { background: #fee2e2; color: #991b1b; }
+  .badge.info { background: #dbeafe; color: #1e40af; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--ink2); margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; font-family: inherit; }
+  textarea { min-height: 84px; resize: vertical; }
+  .btn { background: var(--accent); color: #fff; border: 0; padding: 8px 14px; border-radius: 7px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  .btn:hover { background: var(--accent-dark); }
+  .btn.secondary { background: #e2e8f0; color: var(--ink); }
+  .btn.danger { background: var(--danger); }
+  .btn.sm { padding: 5px 10px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--ink2); font-weight: 600; background: #f8fafc; }
+  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .toast { position: fixed; right: 20px; bottom: 20px; background: #0f172a; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 999; box-shadow: 0 10px 25px rgba(0,0,0,.25); }
+  @media (max-width: 960px) { .grid-4, .grid-2 { grid-template-columns: 1fr; } .app { flex-direction: column; } .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+
+<div id="loginView" class="login-wrap">
+  <div class="login-card">
+    <h1>Companion System v1.0</h1>
+    <p>SnowLuma 网关 · 独立拟人陪伴系统全功能云端总控台</p>
+    <form id="loginForm">
+      <label>管理员账号</label>
+      <input id="loginUser" value="admin" required />
+      <label>密码</label>
+      <input id="loginPass" type="password" placeholder="请输入管理员密码" required />
+      <label>TOTP 二步验证码（未开启可留空）</label>
+      <input id="loginTotp" placeholder="6位动态码" />
+      <div style="margin-top:18px;"><button class="btn" style="width:100%;" type="submit">登录控制台</button></div>
+      <div id="loginErr" style="color:var(--danger);font-size:12px;margin-top:10px;"></div>
+    </form>
+  </div>
+</div>
+
+<div id="appView" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand">
+      Companion System
+      <small>v1.0 Full · SnowLuma</small>
+    </div>
+    <button class="nav-btn active" data-tab="dashboard">运行仪表盘</button>
+    <button class="nav-btn" data-tab="providers">模型总控中心</button>
+    <button class="nav-btn" data-tab="memory">五层记忆与熟人卡</button>
+    <button class="nav-btn" data-tab="stickers">表情包图库</button>
+    <button class="nav-btn" data-tab="persona">人设与回放沙盒</button>
+    <button class="nav-btn" data-tab="perception">热点简报与日程</button>
+    <button class="nav-btn" data-tab="ops">反思、插件与备份</button>
+    <button class="nav-btn" data-tab="alerts">24h 告警通知</button>
+    <div class="sidebar-foot">
+      <div id="userInfo" style="margin-bottom:8px;">已登录</div>
+      <button class="btn secondary sm" style="width:100%;" onclick="logout()">退出登录</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- Dashboard -->
+    <section id="tab-dashboard">
+      <div class="page-head">
+        <h2>运行仪表盘（近 7 天）</h2>
+        <button class="btn secondary sm" onclick="loadDashboard()">刷新数据</button>
+      </div>
+      <div class="grid-4" id="kpiRow"></div>
+      <div class="grid-2">
+        <div class="card"><h3 style="margin-top:0;">网关、TTS 与底座健康</h3><div id="healthBox">加载中...</div></div>
+        <div class="card"><h3 style="margin-top:0;">门卫放行 / 拦截统计</h3><div id="gatekeeperBox">加载中...</div></div>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0;">分槽位 Token 与费用明细</h3>
+        <table><thead><tr><th>槽位</th><th>调用次数</th><th>总 Tokens</th><th>预估费用 (USD)</th></tr></thead><tbody id="slotTable"></tbody></table>
+      </div>
+    </section>
+
+    <!-- Model Control Center -->
+    <section id="tab-providers" class="hidden">
+      <div class="page-head"><h2>模型接入总控中心（六大标准槽位）</h2><button class="btn secondary sm" onclick="loadProviders()">刷新</button></div>
+      <div class="card">
+        <form id="providerForm" class="grid-2">
+          <div>
+            <label>能力槽位</label>
+            <select id="pSlot">
+              <option value="main_brain">main_brain（原生多模态主脑）</option>
+              <option value="gatekeeper">gatekeeper（轻量门卫小模型）</option>
+              <option value="reflection">reflection（凌晨反思模型）</option>
+              <option value="embedding">embedding（向量检索模型）</option>
+              <option value="tts">tts（豆包 TTS 语音引擎）</option>
+              <option value="web_search">web_search（按需联网搜索源）</option>
+            </select>
+            <label>主备角色</label>
+            <select id="pRole"><option value="primary">primary（主路由）</option><option value="fallback">fallback（备用切换）</option></select>
+            <label>名称</label><input id="pName" placeholder="例如 DeepSeek-V3 主线" required />
+            <label>Base URL</label><input id="pUrl" placeholder="https://api.openai.com/v1" required />
+          </div>
+          <div>
+            <label>Model Name / Voice Type</label><input id="pModel" placeholder="gpt-4o / deepseek-chat / BV700_V2_streaming" required />
+            <label>API Key（AES-256-GCM 加密落库）</label><input id="pKey" type="password" placeholder="sk-..." />
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div><label>输入单价 ($/1M)</label><input id="pInPrice" type="number" step="0.01" value="0.27" /></div>
+              <div><label>输出单价 ($/1M)</label><input id="pOutPrice" type="number" step="0.01" value="1.10" /></div>
+            </div>
+            <div style="margin-top:16px;"><button class="btn" type="submit">保存并热生效</button></div>
+          </div>
+        </form>
+      </div>
+      <div class="card"><table><thead><tr><th>槽位</th><th>角色</th><th>名称 / 模型</th><th>密钥掩码</th><th>健康状态</th><th>操作</th></tr></thead><tbody id="providerTable"></tbody></table></div>
+    </section>
+
+    <!-- Memory -->
+    <section id="tab-memory" class="hidden">
+      <div class="page-head"><h2>五层记忆、QQ 强绑定熟人卡与一键忘却</h2><button class="btn secondary sm" onclick="loadMemory()">刷新</button></div>
+      <div class="card">
+        <h3 style="margin-top:0;">QQ 身份与熟人卡（群聊/私聊严格半隔离）</h3>
+        <table><thead><tr><th>QQ 号</th><th>当前昵称</th><th>历史名片 known_names</th><th>亲密度</th><th>操作</th></tr></thead><tbody id="identityTable"></tbody></table>
+      </div>
+      <div class="card"><h3 style="margin-top:0;">L2 边缘旁听摘要</h3><div id="ambientBox">暂无摘要</div></div>
+    </section>
+
+    <!-- Stickers (Phase 2) -->
+    <section id="tab-stickers" class="hidden">
+      <div class="page-head"><h2>表情包自学习图库与批量导入</h2><button class="btn secondary sm" onclick="loadStickers()">刷新</button></div>
+      <div class="card">
+        <h3 style="margin-top:0;">手工批量导入（每行格式：图片URL|情绪标签逗号分隔|语境说明）</h3>
+        <textarea id="stickerImportInput" placeholder="https://example.com/laugh.gif|laugh,哈哈|群友说离谱话时斗图"></textarea>
+        <div style="margin-top:8px;"><button class="btn" onclick="importStickers()">批量导入并启用</button></div>
+      </div>
+      <div class="card"><table><thead><tr><th>来源 / 哈希</th><th>标签</th><th>热度/正向反应</th><th>状态</th><th>操作</th></tr></thead><tbody id="stickerTable"></tbody></table></div>
+    </section>
+
+    <!-- Persona & Sandbox -->
+    <section id="tab-persona" class="hidden">
+      <div class="page-head"><h2>人设版本与群聊回放沙盒</h2></div>
+      <div class="grid-2">
+        <div class="card"><h3 style="margin-top:0;">当前人设版本</h3><div id="personaList">加载中...</div></div>
+        <div class="card">
+          <h3 style="margin-top:0;">门卫回放沙盒（无损调参）</h3>
+          <label>软切入阈值 (0.0 - 1.0)</label><input id="simThreshold" type="number" step="0.05" value="0.78" />
+          <label>测试群聊片段（每行：发言人QQ|内容）</label>
+          <textarea id="simInput">10001|小呆呆，帮我看看今天吃啥
+10002|小呆呆刚才笑死我了
+10003|晚饭吃麻辣烫还是烧烤？</textarea>
+          <div style="margin-top:10px;"><button class="btn" onclick="runSandbox()">运行门卫回放</button></div>
+          <pre id="simResult" style="background:#f1f5f9;padding:10px;border-radius:7px;overflow:auto;font-size:12px;margin-top:10px;"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Perception & Schedule (Phase 3) -->
+    <section id="tab-perception" class="hidden">
+      <div class="page-head">
+        <h2>互联网热点简报与角色作息状态机</h2>
+        <div class="row-actions">
+          <button class="btn sm" onclick="refreshBriefing()">抓取今日刷网简报</button>
+          <button class="btn sm secondary" onclick="syncSchedule()">同步当前作息状态</button>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top:0;">今日刷网背景常识（绝不群发新闻）</h3>
+          <pre id="briefingBox" style="white-space:pre-wrap;background:#f1f5f9;padding:12px;border-radius:7px;font-size:12px;">暂无简报</pre>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0;">角色 24h 作息日程表</h3>
+          <table><thead><tr><th>时段</th><th>活动</th><th>默认心情</th><th>精力目标</th></tr></thead><tbody id="scheduleTable"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Reflection, Plugins & Backups (Phase 2 & 3) -->
+    <section id="tab-ops" class="hidden">
+      <div class="page-head">
+        <h2>凌晨离线反思、插件总线与异地备份</h2>
+        <div class="row-actions">
+          <button class="btn sm" onclick="runReflection()">立即触发离线反思</button>
+          <button class="btn sm secondary" onclick="triggerBackup()">触发异地备份同步</button>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><h3 style="margin-top:0;">已加载标准插件（独立超时与异常隔离）</h3><div id="pluginList">加载中...</div></div>
+        <div class="card"><h3 style="margin-top:0;">PostgreSQL 滚动与异地备份记录</h3><div id="backupList">加载中...</div></div>
+      </div>
+    </section>
+
+    <!-- Alerts -->
+    <section id="tab-alerts" class="hidden">
+      <div class="page-head"><h2>24h 异常告警通知（邮件 / Webhook / 管理员 QQ）</h2><button class="btn sm" onclick="sendTestAlert()">发送测试告警</button></div>
+      <div class="card">
+        <form id="alertForm" class="grid-2">
+          <div>
+            <label>告警通道类型</label>
+            <select id="aType"><option value="webhook">Webhook（飞书 / 钉钉 / Bark）</option><option value="smtp">SMTP 邮件告警</option><option value="qq_admin">QQ 管理员私聊</option></select>
+            <label>通道名称</label><input id="aName" placeholder="例如 运维飞书群" required />
+          </div>
+          <div>
+            <label>通道配置 JSON（加密存储）</label><textarea id="aConfig">{"url": "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"}</textarea>
+            <div style="margin-top:8px;"><button class="btn" type="submit">添加通道</button></div>
+          </div>
+        </form>
+      </div>
+      <div class="card"><h3 style="margin-top:0;">已配置通道与近期告警</h3><div id="alertList">加载中...</div></div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+let TOKEN = localStorage.getItem('companion_token') || '';
+function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 2600); }
+async function api(path, opts = {}) {
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || '请求失败');
+  return data;
+}
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); document.getElementById('loginErr').textContent = '';
+  try {
+    const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: document.getElementById('loginUser').value.trim(), password: document.getElementById('loginPass').value, totp_code: document.getElementById('loginTotp').value.trim() || null }) });
+    TOKEN = data.access_token; localStorage.setItem('companion_token', TOKEN); enterApp(data.username);
+  } catch (err) { document.getElementById('loginErr').textContent = err.message; }
+});
+function logout() { TOKEN = ''; localStorage.removeItem('companion_token'); document.getElementById('appView').classList.add('hidden'); document.getElementById('loginView').classList.remove('hidden'); }
+function enterApp(u) { document.getElementById('loginView').classList.add('hidden'); document.getElementById('appView').classList.remove('hidden'); document.getElementById('userInfo').textContent = '管理员：' + u; loadDashboard(); }
+const TABS = ['dashboard','providers','memory','stickers','persona','perception','ops','alerts'];
+document.querySelectorAll('.nav-btn').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active');
+  const tab = btn.dataset.tab; TABS.forEach(t => document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab));
+  if (tab==='dashboard') loadDashboard(); if (tab==='providers') loadProviders(); if (tab==='memory') loadMemory();
+  if (tab==='stickers') loadStickers(); if (tab==='persona') loadPersona(); if (tab==='perception') loadPerception();
+  if (tab==='ops') loadOps(); if (tab==='alerts') loadAlerts();
+}));
+async function loadDashboard() {
+  const d = await api('/api/dashboard/overview?days=7');
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="card"><div class="kpi-label">今日费用 / 日预算上限</div><div class="kpi-val">$${d.cost.today_spend_usd.toFixed(4)}</div><div class="kpi-sub">上限 $${d.cost.daily_budget_usd} · ${d.cost.budget_fuse_active?'<span class="badge err">已熔断</span>':'<span class="badge ok">正常</span>'}</div></div>
+    <div class="card"><div class="kpi-label">Prompt Cache 命中率</div><div class="kpi-val">${d.tokens.prompt_cache_hit_rate_pct}%</div><div class="kpi-sub">调用 ${d.tokens.total_calls} 次 · TTFT ${d.tokens.avg_ttft_ms}ms</div></div>
+    <div class="card"><div class="kpi-label">门卫放行率</div><div class="kpi-val">${d.gatekeeper.pass_rate_pct}%</div><div class="kpi-sub">处理消息 ${d.gatekeeper.total_messages} 条</div></div>
+    <div class="card"><div class="kpi-label">豆包 TTS 成功率</div><div class="kpi-val">${d.tts.success_rate_pct}%</div><div class="kpi-sub">图库已启用 ${d.counts.stickers_approved} 张 · QQ 身份 ${d.counts.qq_identities}</div></div>
+  `;
+  const gw = d.health.gateway;
+  document.getElementById('healthBox').innerHTML = `<p><strong>协议网关：</strong>${gw.gateway} ${gw.connected?'<span class="badge ok">在线</span>':'<span class="badge warn">未连接</span>'} (${gw.mode})</p><p><strong>状态存储：</strong>${d.health.state_store} · <strong>已加载插件：</strong>${d.health.plugins.length}</p>`;
+  document.getElementById('gatekeeperBox').innerHTML = `<pre style="margin:0;font-size:12px;">${JSON.stringify(d.gatekeeper.breakdown, null, 2)}</pre>`;
+  document.getElementById('slotTable').innerHTML = d.by_slot.length ? d.by_slot.map(s=>`<tr><td>${s.slot}</td><td>${s.calls}</td><td>${s.tokens}</td><td>$${s.cost_usd}</td></tr>`).join('') : '<tr><td colspan="4">暂无调用数据</td></tr>';
+}
+async function loadProviders() {
+  const data = await api('/api/providers');
+  document.getElementById('providerTable').innerHTML = data.items.length ? data.items.map(p=>`<tr><td><span class="badge info">${p.slot}</span></td><td>${p.role}</td><td><strong>${p.name}</strong><br><small>${p.model_name} · ${p.base_url}</small></td><td><code>${p.api_key_masked||'(空)'}</code></td><td><span class="badge ${p.last_health_status==='healthy'?'ok':(p.last_health_status==='error'?'err':'warn')}">${p.last_health_status}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="testProvider(${p.id})">测活</button><button class="btn sm danger" onclick="delProvider(${p.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="6">尚未配置模型路由</td></tr>';
+}
+document.getElementById('providerForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await api('/api/providers', { method: 'PUT', body: JSON.stringify({ slot: document.getElementById('pSlot').value, role: document.getElementById('pRole').value, name: document.getElementById('pName').value.trim(), base_url: document.getElementById('pUrl').value.trim(), model_name: document.getElementById('pModel').value.trim(), api_key: document.getElementById('pKey').value.trim(), price_input_per_1m: parseFloat(document.getElementById('pInPrice').value||'0'), price_output_per_1m: parseFloat(document.getElementById('pOutPrice').value||'0') }) });
+  document.getElementById('pKey').value = ''; toast('模型路由已加密保存'); loadProviders();
+});
+async function testProvider(id) { const r = await api(`/api/providers/${id}/test`, { method: 'POST' }); toast(r.ok ? `测活成功 (${r.latency_ms}ms)` : `测活失败: ${r.error}`); loadProviders(); }
+async function delProvider(id) { await api(`/api/providers/${id}`, { method: 'DELETE' }); toast('已删除'); loadProviders(); }
+async function loadMemory() {
+  const ids = await api('/api/memory/identities');
+  document.getElementById('identityTable').innerHTML = ids.length ? ids.map(i=>`<tr><td><code>${i.qq_id}</code></td><td>${i.nickname||'-'}</td><td>${(i.known_names||[]).join(', ')}</td><td>${i.relationship_level}</td><td><button class="btn sm danger" onclick="forgetUser(${i.qq_id})">一键忘却</button></td></tr>`).join('') : '<tr><td colspan="5">暂无 QQ 身份</td></tr>';
+  const amb = await api('/api/memory/ambient');
+  document.getElementById('ambientBox').innerHTML = amb.length ? amb.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>群 ${a.group_id}</strong> (${a.message_count}条)<div>${a.summary_text}</div></div>`).join('') : '暂无边缘旁听摘要';
+}
+async function forgetUser(qq) { if (!confirm(`确认连根清理 QQ ${qq} 的所有记忆与画像？`)) return; const r = await api('/api/memory/forget', { method: 'POST', body: JSON.stringify({ qq_id: qq, wipe_profile: true }) }); toast(`已清理消息 ${r.messages_deleted} 条`); loadMemory(); }
+async function loadStickers() {
+  const list = await api('/api/stickers');
+  document.getElementById('stickerTable').innerHTML = list.length ? list.map(s=>`<tr><td><code>${s.phash}</code><br><small>${s.origin} · ${s.source_url||s.file_path}</small></td><td>${(s.emotion_tags||[]).join(', ')}</td><td>出现 ${s.appearance_count} / 反应 ${s.positive_reactions}</td><td><span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${s.status}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="reviewSticker(${s.id},'approved')">通过</button><button class="btn sm danger" onclick="delSticker(${s.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="5">暂无表情包</td></tr>';
+}
+async function importStickers() {
+  const lines = document.getElementById('stickerImportInput').value.trim().split('\n').filter(Boolean);
+  const items = lines.map(l => { const [url, tags, hint] = l.split('|'); return { source_url: (url||'').trim(), emotion_tags: (tags||'fun').split(',').map(x=>x.trim()).filter(Boolean), context_hint: (hint||'').trim() }; });
+  const r = await api('/api/stickers/import', { method: 'POST', body: JSON.stringify({ items }) });
+  toast(`已导入 ${r.imported_count} 张表情包`); loadStickers();
+}
+async function reviewSticker(id, status) { await api(`/api/stickers/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); loadStickers(); }
+async function delSticker(id) { await api(`/api/stickers/${id}`, { method: 'DELETE' }); loadStickers(); }
+async function loadPersona() {
+  const list = await api('/api/persona/versions');
+  document.getElementById('personaList').innerHTML = list.map(p=>`<div style="padding:10px 0;border-bottom:1px solid var(--border);"><strong>${p.version_tag} · ${p.bot_name}</strong> ${p.is_active?'<span class="badge ok">生效中</span>':''}<div style="font-size:12px;color:var(--ink2)">别名：${(p.aliases||[]).join(' / ')}</div><div>${p.system_prompt}</div></div>`).join('');
+}
+async function runSandbox() {
+  const lines = document.getElementById('simInput').value.trim().split('\n').filter(Boolean);
+  const messages = lines.map(l => { const [qq, ...rest] = l.split('|'); return { sender_qq: parseInt(qq,10)||10001, text: rest.join('|') }; });
+  const res = await api('/api/persona/sandbox/replay', { method: 'POST', body: JSON.stringify({ messages, override_soft_entry_threshold: parseFloat(document.getElementById('simThreshold').value||'0.78') }) });
+  document.getElementById('simResult').textContent = JSON.stringify(res.results, null, 2);
+}
+async function loadPerception() {
+  const [b, sched] = await Promise.all([api('/api/ops/briefings/latest'), api('/api/ops/schedule')]);
+  document.getElementById('briefingBox').textContent = b.digest_text || '暂无今日刷网简报';
+  document.getElementById('scheduleTable').innerHTML = sched.map(s=>`<tr><td>${s.start_hour}:00 - ${s.end_hour}:00</td><td>${s.activity}</td><td>${s.default_mood}</td><td>${s.energy_target}</td></tr>`).join('');
+}
+async function refreshBriefing() { const r = await api('/api/ops/briefings/refresh', { method: 'POST' }); toast(r.ok ? '简报已更新' : r.message); loadPerception(); }
+async function syncSchedule() { const r = await api('/api/ops/schedule/sync', { method: 'POST', body: '{}' }); toast(`状态已更新：${r.current_activity} (${r.mood})`); }
+async function loadOps() {
+  const [pl, bk] = await Promise.all([api('/api/ops/plugins'), api('/api/ops/backups')]);
+  document.getElementById('pluginList').innerHTML = pl.loaded_plugins.map(p=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>${p.name}</strong> v${p.version} (超时 ${p.timeout_seconds}s)<div style="font-size:12px;color:var(--ink2)">${p.description}</div></div>`).join('');
+  document.getElementById('backupList').innerHTML = bk.length ? bk.map(b=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>${b.filename}</strong> → ${b.remote_target} <span class="badge ${b.status==='success'?'ok':'err'}">${b.status}</span></div>`).join('') : '暂无备份记录';
+}
+async function runReflection() { const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' }); toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}，新黑话 ${r.slang_discovered}`); }
+async function triggerBackup() { await api('/api/ops/backups/trigger', { method: 'POST', body: '{}' }); toast('已触发备份钩子'); loadOps(); }
+async function loadAlerts() {
+  const [chs, evs] = await Promise.all([api('/api/alerts/channels'), api('/api/alerts/events')]);
+  document.getElementById('alertList').innerHTML = `<p><strong>通道 (${chs.length})：</strong> ${chs.map(c=>`<span class="badge info">${c.channel_type}:${c.name}</span>`).join(' ')||'暂无'}</p><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${e.severity}</span></td><td>${e.category}</td><td>${e.title}</td><td>${e.created_at}</td></tr>`).join('')||'<tr><td colspan="4">暂无告警</td></tr>'}</tbody></table>`;
+}
+document.getElementById('alertForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/alerts/channels', { method: 'POST', body: JSON.stringify({ channel_type: document.getElementById('aType').value, name: document.getElementById('aName').value.trim(), config: JSON.parse(document.getElementById('aConfig').value) }) }); toast('告警通道已加密保存'); loadAlerts(); });
+async function sendTestAlert() { const r = await api('/api/alerts/test', { method: 'POST' }); toast('测试告警已发送'); loadAlerts(); }
+(async () => { if (TOKEN) { try { const me = await api('/api/auth/me'); enterApp(me.username); } catch { logout(); } } })();
+</script>
+</body>
+</html>

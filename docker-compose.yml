@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: companion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-companion}
+      POSTGRES_USER: ${POSTGRES_USER:-companion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-companion_secret}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./db/migrations_v2_v3.sql:/docker-entrypoint-initdb.d/02-migrations.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-companion} -d ${POSTGRES_DB:-companion}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - companion_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: companion-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - companion_net
+
+  companion-core:
+    build: .
+    container_name: companion-core
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - sticker_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - companion_net
+      - qq_gateway
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: companion-caddy
+    restart: unless-stopped
+    profiles: ["https"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - companion-core
+    networks:
+      - companion_net
+
+  pg-backup:
+    image: postgres:17-alpine
+    container_name: companion-pg-backup
+    restart: unless-stopped
+    profiles: ["backup"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-companion_secret}
+    volumes:
+      - ./backups:/backups
+    entrypoint: >
+      sh -c "while true; do
+        pg_dump -h postgres -U ${POSTGRES_USER:-companion} ${POSTGRES_DB:-companion} | gzip > /backups/companion_$$(date +%Y%m%d_%H%M%S).sql.gz;
+        find /backups -name 'companion_*.sql.gz' -mtime +14 -delete;
+        sleep 86400;
+      done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - companion_net
+
+volumes:
+  pg_data:
+  redis_data:
+  sticker_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  companion_net:
+    driver: bridge
+  qq_gateway:
+    external: true
+    name: astrbot-napcat_astrbot_network
