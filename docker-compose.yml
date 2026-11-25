@@ -49,11 +49,12 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - companion_net
+      - qq_gateway
 
   caddy:
     image: caddy:2-alpine
@@ -103,3 +104,6 @@ volumes:
 networks:
   companion_net:
     driver: bridge
+  qq_gateway:
+    external: true
+    name: astrbot-napcat_astrbot_network

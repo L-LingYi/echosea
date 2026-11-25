@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     snowluma_ws_url: str = "ws://snowluma:3001/"
     snowluma_http_url: str = "http://snowluma:3000"
     snowluma_access_token: str = ""
+    snowluma_http_access_token: str = ""
     bot_qq: int = 0
     admin_qq: int = 0
 

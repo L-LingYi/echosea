@@ -1,4 +1,4 @@
-"""Companion System v1.0 Complete FastAPI Entrypoint (Phases 1 + 2 + 3)."""
+"""Companion System FastAPI entry point."""
 from __future__ import annotations
 
 import asyncio
@@ -57,16 +57,13 @@ def create_app(
         db_mgr = DatabaseManager()
         db_mgr.init(settings.database_url)
         await db_mgr.create_all()
-        # Safe idempotent PostgreSQL live-upgrade guard (v1.1.0)
-        if settings.database_url.startswith("postgresql"):
-            from sqlalchemy import text as _sql_text
+        if db_mgr.engine.dialect.name == "postgresql":
             mig_path = Path(__file__).resolve().parents[2] / "db" / "migrations_v1_1.sql"
-            if mig_path.exists():
-                async with db_mgr.engine.begin() as conn:
-                    for stmt in mig_path.read_text(encoding="utf-8").split(";"):
-                        s = stmt.strip()
-                        if s and not s.startswith("--"):
-                            await conn.execute(_sql_text(s))
+            async with db_mgr.engine.connect() as conn:
+                raw_connection = await conn.get_raw_connection()
+                driver_connection = raw_connection.driver_connection
+                async with driver_connection.transaction():
+                    await driver_connection.execute(mig_path.read_text(encoding="utf-8"))
         app.state.db_manager = db_mgr
 
         # Seed default admin user if table is empty
@@ -109,6 +106,7 @@ def create_app(
             http_url=settings.snowluma_http_url,
             access_token=settings.snowluma_access_token,
             bot_qq=settings.bot_qq,
+            http_access_token=settings.snowluma_http_access_token,
         )
         multimodal_service = MultimodalService()
         sticker_service = StickerService()

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import uuid
@@ -41,7 +42,7 @@ def detect_voice_intent(text: str, has_reply_quote: bool = False) -> str:
         return "force_text"
     if has_reply_quote and any(k in t for k in ("用语音", "读一下", "念一下", "朗读")):
         return "read_quote"
-    if any(k in t for k in ("用语音回答", "发语音", "语音说", "语音回复")):
+    if any(k in t for k in ("用语音", "发语音", "语音说", "语音回复")):
         return "answer_voice"
     return "default"
 
@@ -152,7 +153,7 @@ class DoubaoTTSService:
                 "synthesis_status": "synthesized",
             }
         except Exception as exc:
-            logger.warning("Doubao TTS failed, falling back to text: %s", exc)
+            logger.warning("Doubao TTS failed, falling back to text: %s", type(exc).__name__)
             delivery.synthesis_status = "failed"
             delivery.onebot_status = "skipped"
             delivery.status = "fallback_text"
@@ -164,15 +165,15 @@ class DoubaoTTSService:
         self,
         session: AsyncSession,
         delivery_id: int,
-        onebot_echo: str,
-        accepted: bool,
+        onebot_echo: str | None,
+        onebot_status: str,
     ) -> None:
         """Record OneBot acceptance status separately from TTS synthesis status."""
         row = await session.get(TTSDelivery, delivery_id)
         if row is not None:
             row.onebot_echo = onebot_echo
-            row.onebot_status = "accepted" if accepted else "failed"
-            row.status = "sent" if accepted else "failed"
+            row.onebot_status = onebot_status
+            row.status = "failed" if onebot_status == "failed" else "sent"
             await session.flush()
 
     @staticmethod
@@ -184,6 +185,44 @@ class DoubaoTTSService:
         speed: float,
     ) -> tuple[bytes, float]:
         extra = provider.extra_config or {}
+        if "/api/v3/tts/" in provider.base_url:
+            headers = {
+                "X-Api-Key": api_key,
+                "X-Api-Resource-Id": extra.get("cluster", "seed-icl-2.0"),
+                "X-Api-Request-Id": str(uuid.uuid4()),
+            }
+            payload = {
+                "user": {"uid": "companion_bot"},
+                "req_params": {
+                    "text": cleaned_text,
+                    "speaker": provider.model_name,
+                    "audio_params": {
+                        "format": "mp3",
+                        "sample_rate": 24000,
+                        "loudness_rate": int(extra.get("loudness_rate", 0)),
+                        "speech_rate": max(-50, min(100, round((extra.get("speed_ratio", speed) - 1) * 100))),
+                    },
+                },
+            }
+            audio = bytearray()
+            async with httpx.AsyncClient(timeout=provider.timeout_seconds) as client:
+                async with client.stream("POST", provider.base_url, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        line = line.strip().removeprefix("data:").strip()
+                        if line == "[DONE]":
+                            break
+                        if not line or line.startswith(("event:", ":")):
+                            continue
+                        chunk = json.loads(line)
+                        if chunk.get("code", 0) not in (0, 20000000):
+                            raise RuntimeError(f"Volcengine V3 TTS returned code {chunk['code']}")
+                        if chunk.get("data"):
+                            audio.extend(base64.b64decode(chunk["data"], validate=True))
+            if not audio:
+                raise RuntimeError("Volcengine V3 TTS returned no audio")
+            return bytes(audio), len(cleaned_text) / (4.2 * speed)
+
         payload = {
             "app": {
                 "appid": extra.get("appid", ""),

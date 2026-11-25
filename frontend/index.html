@@ -477,6 +477,10 @@ let TOKEN = localStorage.getItem('companion_token') || '';
 let CURRENT_TAB = 'dashboard';
 const TABS = ['dashboard','sea','traces','providers','memory','stickers','persona','perception','ops','alerts'];
 
+function escapeHtml(value) {
+  const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(value ?? '').replace(/[&<>"']/g, char => entities[char]);
+}
 function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 2600); }
 function toggleDrawer(force) {
   const sb = document.getElementById('sidebar'), bd = document.getElementById('drawerBackdrop');
@@ -531,7 +535,7 @@ async function loadDashboard() {
     <div class="card kpi-card"><div class="kpi-label">今日费用 / 日预算</div><div class="kpi-val">$${d.cost.today_spend_usd.toFixed(4)}</div><div class="kpi-sub">上限 $${d.cost.daily_budget_usd} · ${d.cost.budget_fuse_active?'<span class="badge err">已熔断</span>':'<span class="badge ok">正常</span>'}</div></div>
     <div class="card kpi-card"><div class="kpi-label">生产耗时 (Avg / P95)</div><div class="kpi-val">${d.tokens.avg_ttft_ms}ms</div><div class="kpi-sub">P95 ${d.tokens.p95_ttft_ms}ms · 缓存命中 ${d.tokens.prompt_cache_hit_rate_pct}%</div></div>
     <div class="card kpi-card"><div class="kpi-label">门卫放行率</div><div class="kpi-val">${d.gatekeeper.pass_rate_pct}%</div><div class="kpi-sub">累计消息 ${d.gatekeeper.total_messages} 条</div></div>
-    <div class="card kpi-card"><div class="kpi-label">豆包语音受理率</div><div class="kpi-val">${d.tts.success_rate_pct}%</div><div class="kpi-sub">合成 ${d.tts.synthesized_count} / 受理 ${d.tts.onebot_accepted_count} · 身份 ${d.counts.qq_identities}</div></div>
+    <div class="card kpi-card"><div class="kpi-label">豆包语音受理率</div><div class="kpi-val">${d.tts.onebot_acceptance_rate_pct == null ? '—' : d.tts.onebot_acceptance_rate_pct + '%'}</div><div class="kpi-sub">合成 ${d.tts.synthesized_count} / 受理 ${d.tts.onebot_accepted_count} · 身份 ${d.counts.qq_identities}</div></div>
   `;
   const gw = d.health.gateway;
   document.getElementById('healthBox').innerHTML = `<p><strong>协议网关：</strong>${gw.gateway} ${gw.connected?'<span class="badge ok">在线</span>':'<span class="badge warn">未连接</span>'} (${gw.mode})</p><p><strong>状态存储：</strong>${d.health.state_store} · <strong>已加载插件：</strong>${d.health.plugins.length} · <strong>已启用表情包：</strong>${d.counts.stickers_approved}</p>`;
@@ -546,7 +550,7 @@ async function loadTraces() {
     <td><code>${r.request_id}</code></td><td>${r.scene}${r.group_id ? ' / '+r.group_id : ''}</td>
     <td><span class="badge info">${r.stage}</span></td>
     <td><span class="badge ${['ok','accepted','synthesized','direct_pass','soft_entry'].includes(r.status)?'ok':(r.status==='silent'?'warn':'err')}">${r.status}</span></td>
-    <td>${r.latency_ms}ms</td><td>${r.error_type || '-'}</td><td>${r.created_at.slice(5,19).replace('T',' ')}</td>
+    <td>${r.latency_ms}ms</td><td>${escapeHtml(r.error_type || '-')}</td><td>${r.created_at.slice(5,19).replace('T',' ')}</td>
   </tr>`).join('') : '<tr><td colspan="7">暂无追踪记录</td></tr>';
 }
 
@@ -624,15 +628,18 @@ document.querySelectorAll('#seaFilters .chip').forEach(btn => {
 });
 
 function renderInspector(node) {
-  const rels = SEA.edges.filter(e => e.source.id === node.id || e.target.id === node.id)
-    .map(e => `<li>${e.source.id === node.id ? '→ ' + e.target.label : '← ' + e.source.label} <span style="color:#60a5fa">(${e.relation})</span></li>`).join('');
+  const edges = SEA.edges.filter(e => e.source.id === node.id || e.target.id === node.id);
+  const rels = edges.map(e => {
+    const label = e.source.id === node.id ? '→ ' + e.target.label : '← ' + e.source.label;
+    return `<li>${escapeHtml(label)} <span style="color:#60a5fa">(${escapeHtml(e.relation)})</span></li>`;
+  }).join('');
   document.getElementById('seaInspector').innerHTML = `
-    <div style="margin-bottom:6px;"><span class="badge info">${LAYER_NAMES[node.layer] || node.layer}</span></div>
-    <h4>${node.label}</h4>
-    <p style="color:#cbd5e1;margin:0 0 8px;">${node.summary || ''}</p>
-    <div style="font-size:11.5px;color:#94a3b8;margin-bottom:6px;"><strong>记忆关联 (${SEA.edges.filter(e=>e.source.id===node.id||e.target.id===node.id).length})：</strong></div>
+    <div style="margin-bottom:6px;"><span class="badge info">${escapeHtml(LAYER_NAMES[node.layer] || node.layer)}</span></div>
+    <h4>${escapeHtml(node.label)}</h4>
+    <p style="color:#cbd5e1;margin:0 0 8px;">${escapeHtml(node.summary)}</p>
+    <div style="font-size:11.5px;color:#94a3b8;margin-bottom:6px;"><strong>记忆关联 (${edges.length})：</strong></div>
     <ul style="margin:0 0 10px;padding-left:16px;color:#e2e8f0;">${rels || '<li>暂无关联</li>'}</ul>
-    <pre style="background:rgba(2,6,23,.65);padding:8px;border-radius:8px;overflow:auto;font-size:11px;color:#93c5fd;margin:0;">${JSON.stringify(node.detail || {}, null, 2)}</pre>
+    <pre style="background:rgba(2,6,23,.65);padding:8px;border-radius:8px;overflow:auto;font-size:11px;color:#93c5fd;margin:0;">${escapeHtml(JSON.stringify(node.detail || {}, null, 2))}</pre>
   `;
 }
 
@@ -799,15 +806,15 @@ async function delProvider(id) { await api(`/api/providers/${id}`, { method: 'DE
 
 async function loadMemory() {
   const ids = await api('/api/memory/identities');
-  document.getElementById('identityTable').innerHTML = ids.length ? ids.map(i=>`<tr><td><code>${i.qq_id}</code></td><td>${i.nickname||'-'}</td><td>${(i.known_names||[]).join(', ')}</td><td>${i.relationship_level}</td><td><button class="btn sm danger" onclick="forgetUser(${i.qq_id})">一键忘却</button></td></tr>`).join('') : '<tr><td colspan="5">暂无 QQ 身份</td></tr>';
+  document.getElementById('identityTable').innerHTML = ids.length ? ids.map(i=>`<tr><td><code>${i.qq_id}</code></td><td>${escapeHtml(i.nickname||'-')}</td><td>${escapeHtml((i.known_names||[]).join(', '))}</td><td>${i.relationship_level}</td><td><button class="btn sm danger" onclick="forgetUser(${i.qq_id})">一键忘却</button></td></tr>`).join('') : '<tr><td colspan="5">暂无 QQ 身份</td></tr>';
   const amb = await api('/api/memory/ambient');
-  document.getElementById('ambientBox').innerHTML = amb.length ? amb.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>群 ${a.group_id}</strong> (${a.message_count}条)<div>${a.summary_text}</div></div>`).join('') : '暂无边缘旁听摘要';
+  document.getElementById('ambientBox').innerHTML = amb.length ? amb.map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);"><strong>群 ${a.group_id}</strong> (${a.message_count}条)<div>${escapeHtml(a.summary_text)}</div></div>`).join('') : '暂无边缘旁听摘要';
 }
 async function forgetUser(qq) { if (!confirm(`确认连根清理 QQ ${qq} 的所有记忆与画像？`)) return; const r = await api('/api/memory/forget', { method: 'POST', body: JSON.stringify({ qq_id: qq, wipe_profile: true }) }); toast(`已清理消息 ${r.messages_deleted} 条`); loadMemory(); }
 
 async function loadStickers() {
   const list = await api('/api/stickers');
-  document.getElementById('stickerTable').innerHTML = list.length ? list.map(s=>`<tr><td><code>${s.phash}</code><br><small>${s.origin} · ${s.source_url||s.file_path}</small></td><td>${(s.emotion_tags||[]).join(', ')}</td><td>出现 ${s.appearance_count} / 反应 ${s.positive_reactions}</td><td><span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${s.status}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="reviewSticker(${s.id},'approved')">通过</button><button class="btn sm danger" onclick="delSticker(${s.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="5">暂无表情包</td></tr>';
+  document.getElementById('stickerTable').innerHTML = list.length ? list.map(s=>`<tr><td><code>${s.phash}</code><br><small>${s.origin} · ${escapeHtml(s.source_url||s.file_path)}</small></td><td>${escapeHtml((s.emotion_tags||[]).join(', '))}</td><td>出现 ${s.appearance_count} / 反应 ${s.positive_reactions}</td><td><span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${s.status}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="reviewSticker(${s.id},'approved')">通过</button><button class="btn sm danger" onclick="delSticker(${s.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="5">暂无表情包</td></tr>';
 }
 async function importStickers() {
   const lines = document.getElementById('stickerImportInput').value.trim().split('\n').filter(Boolean);

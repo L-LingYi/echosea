@@ -26,7 +26,7 @@ from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService, extract_sticker_tags
 from app.core.tts_service import DoubaoTTSService, detect_voice_intent
 from app.core.web_perception_service import WebPerceptionService, needs_fast_web_search
-from app.models.db import ChatMessage, PersonaVersion, PipelineTrace, SystemConfig
+from app.models.db import PersonaVersion, PipelineTrace, SystemConfig
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,8 @@ DEFAULT_SYSTEM_PROMPT = (
 def sanitize_anti_ai_flavor(text: str, banned_phrases: list[str] | None = None) -> str:
     """Defense 1 & 4: Strip AI clichés, markdown formatting noise, and robotic boilerplate."""
     cleaned = text.strip()
+    cleaned = re.sub(r"</?tts\s*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[（(](?:歪头|笑|偷笑|叹气|点头|捂脸|眨眼|摇头)[）)]", "", cleaned)
     cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
     cleaned = re.sub(r"^#{1,6}\s+", "", cleaned, flags=re.MULTILINE)
 
@@ -276,12 +278,7 @@ class CompanionPipeline:
         if not cfg.get("enabled", True):
             return {"handled": "disabled_by_config", "request_id": request_id}
 
-        replied_to_bot = False
-        if envelope.reply_to_msg_id and envelope.self_qq:
-            q_stmt = select(ChatMessage).where(ChatMessage.message_id == envelope.reply_to_msg_id).limit(1)
-            quoted = (await session.execute(q_stmt)).scalar_one_or_none()
-            if quoted and quoted.sender_qq == envelope.self_qq:
-                replied_to_bot = True
+        replied_to_bot = bool(envelope.self_qq and envelope.quoted_sender_qq == envelope.self_qq)
 
         # 3. Three-Layer Gatekeeper Evaluation (wired to Jev System One / gatekeeper slot if configured!)
         t_gk = time.perf_counter()
@@ -345,13 +342,14 @@ class CompanionPipeline:
 
         # 6. Doubao TTS 3-Intent Shortcut ('read_quote')
         voice_intent = detect_voice_intent(envelope.raw_text, has_reply_quote=bool(envelope.expanded_reply_text))
-        if voice_intent == "read_quote" and envelope.expanded_reply_text and self.tts_service is not None:
+        quoted_text = envelope.quoted_text or envelope.expanded_reply_text
+        if voice_intent == "read_quote" and quoted_text and self.tts_service is not None:
             t_tts = time.perf_counter()
             tts_res = await self.tts_service.synthesize_and_record(
                 session=session,
                 scene=envelope.scene,
                 target_id=target_id or envelope.sender_qq,
-                text=envelope.expanded_reply_text,
+                text=quoted_text,
                 intent="read_quote",
                 request_id=request_id,
             )
@@ -359,18 +357,18 @@ class CompanionPipeline:
                 session, request_id, envelope.scene, envelope.group_id, "tts",
                 "synthesized" if tts_res["ok"] else "fallback",
                 latency_ms=int((time.perf_counter() - t_tts) * 1000),
-                error_type=None if tts_res["ok"] else str(tts_res.get("reason", "tts_error"))[:60],
+                error_type=None if tts_res["ok"] else "tts_fallback",
             )
             if tts_res["ok"]:
                 out = await self.adapter.send_voice(session, envelope.scene, target_id or envelope.sender_qq, tts_res["audio_b64"])
                 out.request_id = request_id
-                out.onebot_status = "accepted" if out.status == "sent" else "failed"
-                await self.tts_service.mark_onebot_receipt(session, tts_res["delivery_id"], out.onebot_echo or "", out.status == "sent")
+                await self.tts_service.mark_onebot_receipt(session, tts_res["delivery_id"], out.onebot_echo, out.onebot_status)
                 await self._trace(session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status)
-                return {"handled": "voice_read_quote", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
-            out = await self.adapter.send_message(session, envelope.scene, target_id or envelope.sender_qq, envelope.expanded_reply_text)
+                if out.status == "sent":
+                    return {"handled": "voice_read_quote", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
+            out = await self.adapter.send_message(session, envelope.scene, target_id or envelope.sender_qq, quoted_text)
             out.request_id = request_id
-            out.onebot_status = "accepted" if out.status == "sent" else "failed"
+            await self._trace(session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status)
             return {"handled": "voice_fallback_text", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
 
         # 7. Assemble 5-Layer Memory + Slow/Fast Internet Perception
@@ -445,26 +443,26 @@ class CompanionPipeline:
                 session, request_id, envelope.scene, envelope.group_id, "tts",
                 "synthesized" if tts_res["ok"] else "fallback",
                 latency_ms=int((time.perf_counter() - t_tts) * 1000),
-                error_type=None if tts_res["ok"] else str(tts_res.get("reason", "tts_error"))[:60],
+                error_type=None if tts_res["ok"] else "tts_fallback",
             )
             if tts_res["ok"]:
                 t_ob = time.perf_counter()
                 out = await self.adapter.send_voice(session, envelope.scene, target_id or envelope.sender_qq, tts_res["audio_b64"])
                 out.request_id = request_id
-                out.onebot_status = "accepted" if out.status == "sent" else "failed"
-                await self.tts_service.mark_onebot_receipt(session, tts_res["delivery_id"], out.onebot_echo or "", out.status == "sent")
+                await self.tts_service.mark_onebot_receipt(session, tts_res["delivery_id"], out.onebot_echo, out.onebot_status)
                 await self._trace(
                     session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status,
                     latency_ms=int((time.perf_counter() - t_ob) * 1000),
                 )
-                return {
-                    "handled": "voice_answer",
-                    "request_id": request_id,
-                    "decision": decision.model_dump(),
-                    "bubbles": [cleaned],
-                    "tts": {**tts_res, "onebot_status": out.onebot_status, "onebot_echo": out.onebot_echo},
-                    "provider": completion.provider_name,
-                }
+                if out.status == "sent":
+                    return {
+                        "handled": "voice_answer",
+                        "request_id": request_id,
+                        "decision": decision.model_dump(),
+                        "bubbles": [cleaned],
+                        "tts": {**tts_res, "onebot_status": out.onebot_status, "onebot_echo": out.onebot_echo},
+                        "provider": completion.provider_name,
+                    }
 
         # 11. Natural Bubble Splitting + Outbox Delivery + Optional Sticker Trigger
         t_ob = time.perf_counter()
@@ -480,12 +478,16 @@ class CompanionPipeline:
                 reply_to_msg_id=reply_id,
             )
             delivery.request_id = request_id
-            delivery.onebot_status = "accepted" if delivery.status == "sent" else "failed"
             deliveries.append({"id": delivery.id, "text": bubble, "status": delivery.status, "onebot_status": delivery.onebot_status})
 
+        receipt_statuses = {delivery["onebot_status"] for delivery in deliveries}
+        text_status = next(
+            (status for status in ("failed", "unverified", "submitted", "accepted") if status in receipt_statuses),
+            "skipped",
+        )
         await self._trace(
             session, request_id, envelope.scene, envelope.group_id, "onebot",
-            "accepted" if all(d["status"] == "sent" for d in deliveries) else "failed",
+            text_status,
             latency_ms=int((time.perf_counter() - t_ob) * 1000),
             meta={"bubbles": len(deliveries)},
         )
@@ -501,7 +503,6 @@ class CompanionPipeline:
                     asset.source_url or asset.file_path,
                 )
                 stk_out.request_id = request_id
-                stk_out.onebot_status = "accepted" if stk_out.status == "sent" else "failed"
                 sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
 
         await self.event_bus.emit(
@@ -577,6 +578,12 @@ class CompanionPipeline:
 
         if decision.action == "soft_entry":
             dynamic_parts.append(f"[发言约束] 本次为降权软切入，请保持极简短吐槽或接梗，不超过 {decision.suggested_max_chars} 字。")
+
+        voice_intent = detect_voice_intent(envelope.raw_text, bool(envelope.expanded_reply_text))
+        if voice_intent == "answer_voice":
+            dynamic_parts.append("【输出协议】本轮是语音回答，整条只输出一对 <tts>...</tts>，里面只写口播纯文本。")
+        else:
+            dynamic_parts.append("【输出协议】直接写聊天正文，不输出语音标签。")
 
         messages.append({"role": "system", "content": "\n\n".join(dynamic_parts)})
         user_line = f"{envelope.display_name}: {envelope.raw_text}"

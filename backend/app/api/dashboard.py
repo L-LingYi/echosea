@@ -106,7 +106,8 @@ async def dashboard_overview(
         ).scalar_one()
         or 0
     )
-    tts_success_rate = round((tts_onebot_accepted / tts_total) * 100, 2) if tts_total else 100.0
+    tts_success_rate = round((tts_synthesized / tts_total) * 100, 2) if tts_total else 100.0
+    onebot_acceptance_rate = round((tts_onebot_accepted / tts_total) * 100, 2) if tts_total else None
 
     identities_count = int((await session.execute(select(func.count(QQIdentity.qq_id)))).scalar_one() or 0)
     outbox_sent = int(
@@ -145,8 +146,9 @@ async def dashboard_overview(
             "total_attempts": tts_total,
             "synthesized_count": tts_synthesized,
             "onebot_accepted_count": tts_onebot_accepted,
-            "sent_count": tts_onebot_accepted,
+            "sent_count": tts_synthesized,
             "success_rate_pct": tts_success_rate,
+            "onebot_acceptance_rate_pct": onebot_acceptance_rate,
         },
         "by_slot": by_slot,
         "gatekeeper": {
