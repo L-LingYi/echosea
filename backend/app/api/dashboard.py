@@ -26,14 +26,122 @@ from app.models.db import (
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
+def _to_local(dt: datetime, tz_delta: timedelta) -> datetime:
+    utc_dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    return utc_dt + tz_delta
+
+
+async def _build_usage_series(
+    session: AsyncSession,
+    now_utc: datetime,
+    days: int,
+    tz_offset_minutes: int,
+) -> dict:
+    tz_delta = timedelta(minutes=tz_offset_minutes)
+    now_local = now_utc + tz_delta
+    today_local = now_local.date()
+    start_day_local = today_local - timedelta(days=days - 1)
+    start_day_utc = datetime(start_day_local.year, start_day_local.month, start_day_local.day, tzinfo=timezone.utc) - tz_delta
+
+    current_hour_local = now_local.replace(minute=0, second=0, microsecond=0)
+    start_hour_local = current_hour_local - timedelta(hours=23)
+    start_hour_utc = start_hour_local.replace(tzinfo=timezone.utc) - tz_delta
+
+    series_since = min(start_day_utc, start_hour_utc)
+
+    daily_map: dict[str, dict] = {}
+    for offset in range(days):
+        d = start_day_local + timedelta(days=offset)
+        key = d.isoformat()
+        daily_map[key] = {
+            "date": key,
+            "label": d.strftime("%m-%d"),
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "tokens": 0,
+            "tts_chars": 0,
+            "calls": 0,
+        }
+
+    hourly_map: dict[str, dict] = {}
+    for offset in range(24):
+        h = start_hour_local + timedelta(hours=offset)
+        key = h.strftime("%Y-%m-%d %H:00")
+        hourly_map[key] = {
+            "hour": key,
+            "label": h.strftime("%H:00"),
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "tokens": 0,
+            "tts_chars": 0,
+            "calls": 0,
+        }
+
+    usage_rows = (
+        await session.execute(
+            select(
+                UsageMetric.created_at,
+                UsageMetric.prompt_tokens,
+                UsageMetric.completion_tokens,
+            ).where(UsageMetric.created_at >= series_since, UsageMetric.source != "probe")
+        )
+    ).all()
+
+    for created_at, p_tok, c_tok in usage_rows:
+        if created_at is None:
+            continue
+        local_dt = _to_local(created_at, tz_delta)
+        p_val, c_val = int(p_tok or 0), int(c_tok or 0)
+        d_key = local_dt.date().isoformat()
+        if d_key in daily_map:
+            daily_map[d_key]["prompt_tokens"] += p_val
+            daily_map[d_key]["completion_tokens"] += c_val
+            daily_map[d_key]["tokens"] += p_val + c_val
+            daily_map[d_key]["calls"] += 1
+        h_key = local_dt.strftime("%Y-%m-%d %H:00")
+        if h_key in hourly_map:
+            hourly_map[h_key]["prompt_tokens"] += p_val
+            hourly_map[h_key]["completion_tokens"] += c_val
+            hourly_map[h_key]["tokens"] += p_val + c_val
+            hourly_map[h_key]["calls"] += 1
+
+    tts_rows = (
+        await session.execute(
+            select(
+                TTSDelivery.created_at,
+                func.length(TTSDelivery.cleaned_text),
+            ).where(TTSDelivery.created_at >= series_since, TTSDelivery.synthesis_status == "synthesized")
+        )
+    ).all()
+
+    for created_at, text_len in tts_rows:
+        if created_at is None:
+            continue
+        local_dt = _to_local(created_at, tz_delta)
+        chars_val = int(text_len or 0)
+        d_key = local_dt.date().isoformat()
+        if d_key in daily_map:
+            daily_map[d_key]["tts_chars"] += chars_val
+        h_key = local_dt.strftime("%Y-%m-%d %H:00")
+        if h_key in hourly_map:
+            hourly_map[h_key]["tts_chars"] += chars_val
+
+    return {
+        "daily": list(daily_map.values()),
+        "hourly": list(hourly_map.values()),
+    }
+
+
 @router.get("/overview")
 async def dashboard_overview(
     days: int = Query(default=7, ge=1, le=90),
+    tz_offset_minutes: int = Query(default=480, ge=-720, le=840),
     _admin=Depends(get_current_admin),
     session: AsyncSession = Depends(get_db),
     runtime=Depends(get_runtime),
 ):
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    now_utc = datetime.now(timezone.utc)
+    since = now_utc - timedelta(days=days)
 
     # Strictly filter production traffic (exclude source='probe' so probes never skew TTFT/P95)
     u_stmt = select(
@@ -196,6 +304,7 @@ async def dashboard_overview(
 
     today_spend = await runtime.model_hub.get_today_spend_usd(session)
     budget_limit = runtime.model_hub.daily_budget_usd
+    usage_series = await _build_usage_series(session, now_utc, days, tz_offset_minutes)
 
     return {
         "window_days": days,
@@ -234,6 +343,7 @@ async def dashboard_overview(
             "onebot_acceptance_rate_pct": tts_accept_rate,
         },
         "by_slot": by_slot,
+        "usage_series": usage_series,
         "gatekeeper": {
             "total_messages": total_msgs,
             "pass_rate_pct": gatekeeper_pass_rate,

@@ -302,6 +302,40 @@
     border: 1px solid rgba(148,163,184,.18); pointer-events: none;
   }
 
+  /* Usage Bar Chart */
+  .usage-chart-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .usage-chart-head h3 { margin: 0; }
+  .usage-chart-head .seg-bar { margin-bottom: 0; }
+  .usage-meta { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12.5px; color: var(--mute); margin-bottom: 12px; min-height: 22px; }
+  .usage-bars {
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px;
+    align-items: end; height: 184px; padding: 22px 8px 4px;
+    background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px;
+  }
+  .usage-bar-col {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    gap: 6px; cursor: pointer; position: relative; min-width: 0;
+  }
+  .usage-bar-val {
+    font-size: 10.5px; color: var(--mute); font-weight: 600; white-space: nowrap;
+    line-height: 1; min-height: 12px;
+  }
+  .usage-bar-track {
+    width: 100%; max-width: 34px; flex: 1; display: flex; align-items: flex-end; justify-content: center;
+  }
+  .usage-bar-fill {
+    width: 100%; min-height: 3px; border-radius: 6px 6px 2px 2px;
+    background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
+    transition: height .25s ease, filter .15s ease;
+  }
+  .usage-bar-col:hover .usage-bar-fill, .usage-bar-col.active .usage-bar-fill {
+    filter: brightness(1.18); box-shadow: 0 0 0 2px var(--accent-soft);
+  }
+  .usage-bar-col.zero .usage-bar-fill { opacity: .28; }
+  .usage-bar-lbl {
+    font-size: 11px; color: var(--mute); white-space: nowrap; line-height: 1;
+  }
+
   .empty-state { text-align: center; padding: 34px 16px; color: var(--mute); font-size: 13px; }
   .toast {
     position: fixed; right: 20px; bottom: 24px; background: #0f172a; color: #fff;
@@ -327,7 +361,13 @@
 
 <div id="loginView" class="login-wrap">
   <div class="login-card">
-    <div class="login-logo">呆</div>
+    <div class="login-logo" aria-hidden="true">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 12c2.2-2.8 4.4-2.8 6.6 0s4.4 2.8 6.6 0 4.4-2.8 6.8 0" />
+        <path d="M5 17c1.8-1.8 3.6-1.8 5.4 0s3.6 1.8 5.4 0 3.2-1.6 4.2-.6" opacity=".82" />
+        <path d="M6.5 7.2a8 8 0 0 1 11 0" opacity=".7" />
+      </svg>
+    </div>
     <h1>EchoSea · 回声海 v1.4.2</h1>
     <p>SnowLuma 网关 · 记忆意识海 · 云端陪伴总控台</p>
     <form id="loginForm">
@@ -350,7 +390,13 @@
 
   <aside id="sidebar" class="sidebar">
     <div class="brand">
-      <div class="brand-orb">呆</div>
+      <div class="brand-orb" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12c2.2-2.8 4.4-2.8 6.6 0s4.4 2.8 6.6 0 4.4-2.8 6.8 0" />
+          <path d="M5 17c1.8-1.8 3.6-1.8 5.4 0s3.6 1.8 5.4 0 3.2-1.6 4.2-.6" opacity=".82" />
+          <path d="M6.5 7.2a8 8 0 0 1 11 0" opacity=".7" />
+        </svg>
+      </div>
       <div>EchoSea · 回声海<small>v1.4.2 · SnowLuma &amp; Jev</small></div>
     </div>
     <div class="nav-group">核心观测</div>
@@ -383,6 +429,17 @@
       <div class="grid-2">
         <div class="card"><h3>📡 网关、语音三态与底座健康</h3><div id="healthBox">加载中...</div></div>
         <div class="card"><h3>🛡️ 门卫放行 / 主动接话 / 静默分布</h3><div id="gatekeeperBox">加载中...</div></div>
+      </div>
+      <div class="card">
+        <div class="usage-chart-head">
+          <h3>📊 总消耗柱状统计</h3>
+          <div class="seg-bar">
+            <button class="seg-btn active" data-ugran="daily" onclick="switchUsageGranularity('daily')">按天（近 7 天）</button>
+            <button class="seg-btn" data-ugran="hourly" onclick="switchUsageGranularity('hourly')">按小时（最近 24 小时）</button>
+          </div>
+        </div>
+        <div id="usageChartMeta" class="usage-meta">加载中...</div>
+        <div id="usageBars" class="usage-bars"></div>
       </div>
       <div class="card">
         <h3>⚡ 分槽位消耗明细（Token / 语音字符）</h3>
@@ -768,7 +825,59 @@ let TOKEN = localStorage.getItem('companion_token') || '';
 let CURRENT_TAB = 'dashboard';
 let PROVIDERS_CACHE = [];
 let LAST_CHECKED_REF = '';
+let USAGE_SERIES_CACHE = { daily: [], hourly: [] };
+let USAGE_GRANULARITY = 'daily';
 const TABS = ['dashboard','sea','traces','providers','stickers','persona','perception','ops','alerts'];
+
+const SLOT_LABELS = {
+  main_brain: '主脑对话',
+  gatekeeper: '门卫决策',
+  reflection: '离线反思',
+  embedding: '向量检索',
+  tts: '语音合成',
+  web_search: '联网搜索',
+};
+const ROLE_LABELS = { primary: '主路由', fallback: '备用路由' };
+const PROTO_LABELS = { openai_compatible: 'OpenAI 兼容', typesafe_systemone: 'Jev 原生协议' };
+const HEALTH_LABELS = { healthy: '健康', error: '异常', unknown: '未测活' };
+const STAGE_LABELS = {
+  inbound: '入站接收',
+  gatekeeper: '门卫决策',
+  main_brain: '主脑生成',
+  tts: '语音合成',
+  onebot: 'OneBot 投递',
+  reflection: '离线反思',
+};
+const STATUS_LABELS = {
+  ok: '成功',
+  accepted: '已受理',
+  submitted: '已提交',
+  synthesized: '已合成',
+  direct_pass: '直接放行',
+  soft_entry: '主动软切入',
+  silent: '静默旁听',
+  blocked_recall: '撤回拦截',
+  approved: '已启用',
+  pending: '待审核',
+  rejected: '已拒绝',
+  succeeded: '成功',
+  running: '进行中',
+  failed: '失败',
+  rolled_back: '已回滚',
+  success: '成功',
+  error: '失败',
+};
+const SEVERITY_LABELS = { critical: '严重', warning: '警告', info: '通知' };
+const ALERT_TYPE_LABELS = { webhook: 'Webhook 推送', smtp: 'SMTP 邮件', qq_admin: 'QQ 管理员私聊' };
+const STORE_LABELS = { redis: 'Redis 状态库', memory: '内存状态库' };
+const GATEWAY_MODE_LABELS = { reverse_ws: '反向 WS', forward_ws: '正向 WS', webhook: 'HTTP 回调' };
+function labelOf(map, key) { return map[key] || key || '-'; }
+function formatCompactNum(n) {
+  const num = Number(n || 0);
+  if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(num);
+}
 
 function esc(val) {
   return String(val ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
@@ -827,8 +936,53 @@ function refreshCurrentTab() {
 document.querySelectorAll('.nav-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
 
 /* --- 1. Dashboard (Visual Bars, Zero Raw JSON) --- */
+function switchUsageGranularity(gran) {
+  USAGE_GRANULARITY = gran === 'hourly' ? 'hourly' : 'daily';
+  document.querySelectorAll('[data-ugran]').forEach(b => b.classList.toggle('active', b.dataset.ugran === USAGE_GRANULARITY));
+  renderUsageChart();
+}
+function selectUsageBar(idx) {
+  const items = USAGE_SERIES_CACHE[USAGE_GRANULARITY] || [];
+  const item = items[idx];
+  if (!item) return;
+  document.querySelectorAll('#usageBars .usage-bar-col').forEach((el, i) => el.classList.toggle('active', i === idx));
+  const title = USAGE_GRANULARITY === 'hourly' ? (item.hour || item.label) : (item.date || item.label);
+  const ttsPart = item.tts_chars ? ` · 语音 <strong>${Number(item.tts_chars).toLocaleString()}</strong> 字` : '';
+  document.getElementById('usageChartMeta').innerHTML = `<span><strong>${esc(title)}</strong> · 总消耗 <strong>${Number(item.tokens||0).toLocaleString()}</strong> Token（输入 ${Number(item.prompt_tokens||0).toLocaleString()} / 输出 ${Number(item.completion_tokens||0).toLocaleString()}）· 调用 ${Number(item.calls||0)} 次${ttsPart}</span><span>单位：Token</span>`;
+}
+function renderUsageChart() {
+  const items = USAGE_SERIES_CACHE[USAGE_GRANULARITY] || [];
+  const box = document.getElementById('usageBars');
+  const meta = document.getElementById('usageChartMeta');
+  if (!items.length) {
+    meta.innerHTML = '<span>暂无消耗趋势数据</span><span>单位：Token</span>';
+    box.innerHTML = '<div class="empty-state" style="width:100%;">暂无统计数据</div>';
+    return;
+  }
+  const maxTok = Math.max(1, ...items.map(x => Number(x.tokens || 0)));
+  const totalTok = items.reduce((acc, x) => acc + Number(x.tokens || 0), 0);
+  const totalCalls = items.reduce((acc, x) => acc + Number(x.calls || 0), 0);
+  const totalTts = items.reduce((acc, x) => acc + Number(x.tts_chars || 0), 0);
+  const winLabel = USAGE_GRANULARITY === 'hourly' ? '最近 24 小时' : `近 ${items.length} 天`;
+  const ttsSummary = totalTts ? ` · 语音 <strong>${totalTts.toLocaleString()}</strong> 字` : '';
+  meta.innerHTML = `<span>${winLabel}累计 <strong>${totalTok.toLocaleString()}</strong> Token · 调用 ${totalCalls.toLocaleString()} 次${ttsSummary}（悬停或点击柱条查看明细）</span><span>峰值 ${maxTok.toLocaleString()} Token</span>`;
+  const isHourly = USAGE_GRANULARITY === 'hourly';
+  box.innerHTML = items.map((item, idx) => {
+    const val = Number(item.tokens || 0);
+    const pct = val > 0 ? Math.max(4, Math.round((val / maxTok) * 100)) : 0;
+    const shortLbl = isHourly ? ((idx % 3 === 0 || idx === items.length - 1) ? item.label.slice(0, 2) : '') : item.label;
+    const topVal = val > 0 && (!isHourly || val === maxTok || idx % 3 === 0) ? formatCompactNum(val) : '';
+    return `<div class="usage-bar-col${val === 0 ? ' zero' : ''}" onmouseenter="selectUsageBar(${idx})" onclick="selectUsageBar(${idx})" title="${esc(item.hour || item.date)}：${val.toLocaleString()} Token">
+      <div class="usage-bar-val">${esc(topVal)}</div>
+      <div class="usage-bar-track"><div class="usage-bar-fill" style="height:${val > 0 ? pct : 3}%"></div></div>
+      <div class="usage-bar-lbl">${esc(shortLbl)}</div>
+    </div>`;
+  }).join('');
+}
 async function loadDashboard() {
-  const d = await api('/api/dashboard/overview?days=7');
+  const tzOffset = -new Date().getTimezoneOffset();
+  const d = await api(`/api/dashboard/overview?days=7&tz_offset_minutes=${tzOffset}`);
+  USAGE_SERIES_CACHE = d.usage_series || { daily: [], hourly: [] };
   const cachePct = Math.min(100, Number(d.tokens.prompt_cache_hit_rate_pct || 0));
   document.getElementById('kpiRow').innerHTML = `
     <div class="card kpi-card">
@@ -850,17 +1004,17 @@ async function loadDashboard() {
     <div class="card kpi-card">
       <div class="kpi-top"><span class="kpi-label">语音合成字符</span><span class="kpi-icon">🎙️</span></div>
       <div class="kpi-val">${Number(d.tts.today_chars||0).toLocaleString()} 字</div>
-      <div class="kpi-sub">近 ${d.window_days} 天 <strong>${Number(d.tts.total_chars||0).toLocaleString()} 字</strong> · 合成 ${d.tts.synthesized_count} 次 (成功率 ${d.tts.success_rate_pct}% / 受理 ${d.tts.onebot_accept_rate_pct}%)</div>
+      <div class="kpi-sub">近 ${d.window_days} 天 <strong>${Number(d.tts.total_chars||0).toLocaleString()} 字</strong> · 合成 ${d.tts.synthesized_count} 次 (成功率 ${d.tts.success_rate_pct}% / 受理 ${d.tts.onebot_accept_rate_pct ?? '-'}%)</div>
     </div>
   `;
   const gw = d.health.gateway;
   document.getElementById('healthBox').innerHTML = `
     <div class="pill-list" style="margin-bottom:12px;">
-      <span class="badge ${gw.connected?'ok':'warn'}">● ${esc(gw.gateway)} (${esc(gw.mode)})</span>
-      <span class="badge info">状态库：${esc(d.health.state_store)}</span>
-      <span class="badge purple">插件：${d.health.plugins.length}</span>
+      <span class="badge ${gw.connected?'ok':'warn'}">● ${esc(gw.gateway)}（${esc(labelOf(GATEWAY_MODE_LABELS, gw.mode))} · ${gw.connected ? '已连接' : '未连接'}）</span>
+      <span class="badge info">状态库：${esc(labelOf(STORE_LABELS, d.health.state_store))}</span>
+      <span class="badge purple">插件：${d.health.plugins.length} 个</span>
     </div>
-    <div style="font-size:13px;color:var(--ink2);">已绑定 QQ 熟人卡 <strong>${d.counts.qq_identities}</strong> 位 · 已启用表情包 <strong>${d.counts.stickers_approved}</strong> 张 · Outbox 投递 <strong>${d.counts.outbox_sent}</strong> 条</div>
+    <div style="font-size:13px;color:var(--ink2);">已绑定 QQ 熟人卡 <strong>${d.counts.qq_identities}</strong> 位 · 已启用表情包 <strong>${d.counts.stickers_approved}</strong> 张 · 出站投递 <strong>${d.counts.outbox_sent}</strong> 条</div>
   `;
   const gk = d.gatekeeper.breakdown || {};
   const tot = Math.max(1, d.gatekeeper.total_messages);
@@ -874,7 +1028,8 @@ async function loadDashboard() {
     const cnt = Number(gk[k] || 0), pct = ((cnt / tot) * 100).toFixed(1);
     return `<div class="bar-row"><div class="bar-meta"><span>${label}</span><span><strong>${cnt}</strong> (${pct}%)</span></div><div class="progress-track"><div class="progress-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
   }).join('');
-  document.getElementById('slotTable').innerHTML = d.by_slot.length ? d.by_slot.map(s=> s.unit==='chars' ? `<tr><td><span class="badge purple">${esc(s.slot)}</span></td><td>${s.calls}</td><td>-</td><td>-</td><td><strong>${Number(s.chars||0).toLocaleString()} 字符</strong></td></tr>` : `<tr><td><span class="badge info">${esc(s.slot)}</span></td><td>${s.calls}</td><td>${Number(s.prompt_tokens||0).toLocaleString()}</td><td>${Number(s.completion_tokens||0).toLocaleString()}</td><td><strong>${Number(s.tokens||0).toLocaleString()} Token</strong></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">暂无生产调用数据</td></tr>';
+  renderUsageChart();
+  document.getElementById('slotTable').innerHTML = d.by_slot.length ? d.by_slot.map(s=> s.unit==='chars' ? `<tr><td><span class="badge purple">${esc(labelOf(SLOT_LABELS, s.slot))}</span></td><td>${s.calls}</td><td>-</td><td>-</td><td><strong>${Number(s.chars||0).toLocaleString()} 字符</strong></td></tr>` : `<tr><td><span class="badge info">${esc(labelOf(SLOT_LABELS, s.slot))}</span></td><td>${s.calls}</td><td>${Number(s.prompt_tokens||0).toLocaleString()}</td><td>${Number(s.completion_tokens||0).toLocaleString()}</td><td><strong>${Number(s.tokens||0).toLocaleString()} Token</strong></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">暂无生产调用数据</td></tr>';
 }
 
 /* --- 2. Unified Memory & Consciousness Sea (Structured Inspector, Zero Raw JSON) --- */
@@ -887,7 +1042,7 @@ async function loadMemoryTables() {
     <td><button class="btn sm danger" onclick="forgetUser(${Number(i.qq_id)})">一键忘却</button></td>
   </tr>`).join('') : '<tr><td colspan="5" class="empty-state">暂无 QQ 身份记录</td></tr>';
   document.getElementById('ambientBox').innerHTML = amb.length ? amb.map(a=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);"><div style="display:flex;justify-content:space-between;margin-bottom:4px;"><strong>群 ${esc(a.group_id)}</strong><span class="badge info">${Number(a.message_count)} 条沉淀</span></div><div style="font-size:13px;color:var(--ink2)">${esc(a.summary_text)}</div></div>`).join('') : '<div class="empty-state">暂无边缘旁听摘要</div>';
-  document.getElementById('slangBox').innerHTML = slangs.length ? slangs.map(s=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;gap:8px;align-items:center;"><div><strong>${esc(s.phrase)}</strong> <span class="badge ${s.status==='approved'?'ok':'warn'}">${esc(s.status)}</span><div style="font-size:12px;color:var(--mute)">${esc(s.meaning)}</div></div>${s.status==='pending'?`<button class="btn sm secondary" onclick="approveSlang(${Number(s.id)})">通过</button>`:''}</div>`).join('') : '<div class="empty-state">暂无群黑话</div>';
+  document.getElementById('slangBox').innerHTML = slangs.length ? slangs.map(s=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;gap:8px;align-items:center;"><div><strong>${esc(s.phrase)}</strong> <span class="badge ${s.status==='approved'?'ok':'warn'}">${esc(labelOf(STATUS_LABELS, s.status))}</span><div style="font-size:12px;color:var(--mute)">${esc(s.meaning)}</div></div>${s.status==='pending'?`<button class="btn sm secondary" onclick="approveSlang(${Number(s.id)})">通过</button>`:''}</div>`).join('') : '<div class="empty-state">暂无群黑话</div>';
 }
 async function approveSlang(id) { await api(`/api/memory/expressions/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'approved' }) }); toast('已通过黑话'); loadMemoryTables(); }
 async function forgetUser(qq) { if (!confirm(`确认连根清理 QQ ${qq} 的所有记忆与画像？`)) return; const r = await api('/api/memory/forget', { method: 'POST', body: JSON.stringify({ qq_id: qq, wipe_profile: true }) }); toast(`已清理消息 ${r.messages_deleted} 条`); loadUnifiedMemory(); }
@@ -1044,8 +1199,8 @@ async function loadTraces() {
   const rows = await api('/api/dashboard/traces?limit=80');
   document.getElementById('traceTable').innerHTML = rows.length ? rows.map(r=>`<tr>
     <td><code>${esc(r.request_id)}</code></td><td>${esc(r.scene)}${r.group_id ? ' / '+esc(r.group_id) : ''}</td>
-    <td><span class="badge info">${esc(r.stage)}</span></td>
-    <td><span class="badge ${['ok','accepted','submitted','synthesized','direct_pass','soft_entry'].includes(r.status)?'ok':(r.status==='silent'?'warn':'err')}">${esc(r.status)}</span></td>
+    <td><span class="badge info">${esc(labelOf(STAGE_LABELS, r.stage))}</span></td>
+    <td><span class="badge ${['ok','accepted','submitted','synthesized','direct_pass','soft_entry'].includes(r.status)?'ok':(r.status==='silent'?'warn':'err')}">${esc(labelOf(STATUS_LABELS, r.status))}</span></td>
     <td>${Number(r.latency_ms)}ms</td><td>${esc(r.error_type || '-')}</td><td>${esc((r.created_at||'').slice(5,19).replace('T',' '))}</td>
   </tr>`).join('') : '<tr><td colspan="7" class="empty-state">暂无追踪记录</td></tr>';
 }
@@ -1057,8 +1212,8 @@ async function loadProviders() {
   document.getElementById('providerGrid').innerHTML = PROVIDERS_CACHE.length ? PROVIDERS_CACHE.map(p=>`
     <div class="provider-card">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-        <span class="badge info">${esc(p.slot)} · ${esc(p.role)}</span>
-        <span class="badge ${p.cooldown_active?'warn':(p.last_health_status==='healthy'?'ok':(p.last_health_status==='error'?'err':'warn'))}">● ${p.cooldown_active ? ('冷却中 '+Math.max(1,Math.ceil(Number(p.cooldown_remaining_seconds||0)/60))+'m') : esc(p.last_health_status)} ${(!p.cooldown_active && p.last_health_ms) ? Number(p.last_health_ms)+'ms' : ''}</span>
+        <span class="badge info">${esc(labelOf(SLOT_LABELS, p.slot))} · ${esc(labelOf(ROLE_LABELS, p.role))}</span>
+        <span class="badge ${p.cooldown_active?'warn':(p.last_health_status==='healthy'?'ok':(p.last_health_status==='error'?'err':'warn'))}">● ${p.cooldown_active ? ('冷却中 '+Math.max(1,Math.ceil(Number(p.cooldown_remaining_seconds||0)/60))+'m') : esc(labelOf(HEALTH_LABELS, p.last_health_status))} ${(!p.cooldown_active && p.last_health_ms) ? Number(p.last_health_ms)+'ms' : ''}</span>
       </div>
       <div>
         <div style="font-weight:700;font-size:15px;">${esc(p.name)}</div>
@@ -1066,7 +1221,7 @@ async function loadProviders() {
       </div>
       <div style="font-size:12px;color:var(--ink2);word-break:break-all;">${esc(p.base_url)}</div>
       <div class="pill-list">
-        <span class="badge purple">${esc(p.protocol)}</span>
+        <span class="badge purple">${esc(labelOf(PROTO_LABELS, p.protocol))}</span>
         <code>${esc(p.api_key_masked||'(空)')}</code>
       </div>
       ${p.cooldown_active ? `<div style="font-size:11.5px;color:var(--warn-ink);background:var(--warn-bg);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:6px 8px;">已切备路：${esc(p.cooldown_reason||'冷却保护中')}，到期自动试探回切</div>` : ''}
@@ -1147,7 +1302,7 @@ async function loadStickers() {
       </div>
       <div class="sticker-body">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${esc(s.status)}</span>
+          <span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${esc(labelOf(STATUS_LABELS, s.status))}</span>
           <span style="font-size:11.5px;color:var(--mute);">出现 ${Number(s.appearance_count)} · 反应 ${Number(s.positive_reactions)}</span>
         </div>
         <div class="pill-list">${(s.emotion_tags||[]).map(t=>`<span class="badge info">${esc(t)}</span>`).join('')||'<span class="badge warn">未打标</span>'}</div>
@@ -1223,7 +1378,7 @@ async function runSandbox() {
     <div style="padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--surface-2);">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
         <strong>${esc(r.sender)}: ${esc(r.text)}</strong>
-        <span class="badge ${r.decision.action==='direct_pass'?'ok':(r.decision.action==='soft_entry'?'info':'warn')}">${esc(r.decision.action)} (${r.decision.score})</span>
+        <span class="badge ${r.decision.action==='direct_pass'?'ok':(r.decision.action==='soft_entry'?'info':'warn')}">${esc(labelOf(STATUS_LABELS, r.decision.action))} (${r.decision.score})</span>
       </div>
       <div style="font-size:12px;color:var(--mute);margin-top:4px;">${esc(r.decision.reason)}</div>
     </div>
@@ -1279,10 +1434,10 @@ async function loadOps() {
   document.getElementById('bkAuthBadge').innerHTML = bkCfg.aliyun_authorized ? `<span class="badge ok">已授权 (${esc(bkCfg.aliyun_refresh_token_masked)})</span>` : '<span class="badge warn">未授权：请填入 Refresh Token 或改用 WebDAV 模式</span>';
   toggleBackupFields();
   document.getElementById('pluginList').innerHTML = pl.loaded_plugins.map(p=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);"><strong>${esc(p.name)}</strong> <span class="badge info">v${esc(p.version)}</span> <span style="font-size:12px;color:var(--mute);">超时 ${Number(p.timeout_seconds)}s</span><div style="font-size:12.5px;color:var(--ink2);margin-top:3px;">${esc(p.description)}</div></div>`).join('');
-  document.getElementById('backupList').innerHTML = bk.length ? bk.map(b=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;"><span><strong>${esc(b.filename)}</strong> → ${esc(b.remote_target)}</span><span class="badge ${b.status==='success'?'ok':'err'}">${esc(b.status)}</span></div>`).join('') : '<div class="empty-state">暂无备份记录</div>';
+  document.getElementById('backupList').innerHTML = bk.length ? bk.map(b=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;"><span><strong>${esc(b.filename)}</strong> → ${esc(b.remote_target)}</span><span class="badge ${b.status==='success'?'ok':'err'}">${esc(labelOf(STATUS_LABELS, b.status))}</span></div>`).join('') : '<div class="empty-state">暂无备份记录</div>';
   const modeLabel = upd.mode === 'github_public' ? `GitHub 公开仓库 (${esc(upd.github_repo)})` : '本地仓库模式';
   document.getElementById('updateStatusBox').innerHTML = `<div class="pill-list"><span class="badge info">当前版本 v${esc(upd.current_version)}</span><span class="badge purple">${modeLabel}</span><span class="badge ${upd.updater_configured?'ok':'warn'}">${upd.updater_configured?'宿主机更新代理就绪':'未配置宿主机更新代理'}</span></div>`;
-  document.getElementById('updateJobTable').innerHTML = (upd.jobs || []).length ? upd.jobs.map(j=>`<tr><td><code>${esc(j.job_uid)}</code></td><td>${esc(j.mode)} / ${esc(j.target_ref)}</td><td><code>${esc(j.from_commit||j.from_version)}</code> → <code>${esc(j.to_commit||'-')}</code></td><td><span class="badge ${j.status==='succeeded'?'ok':(j.status==='running'||j.status==='pending'?'info':'err')}">${esc(j.status)}</span></td><td>${esc(j.log_summary)}</td><td>${esc((j.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">暂无在线更新记录</td></tr>';
+  document.getElementById('updateJobTable').innerHTML = (upd.jobs || []).length ? upd.jobs.map(j=>`<tr><td><code>${esc(j.job_uid)}</code></td><td>${esc(j.mode)} / ${esc(j.target_ref)}</td><td><code>${esc(j.from_commit||j.from_version)}</code> → <code>${esc(j.to_commit||'-')}</code></td><td><span class="badge ${j.status==='succeeded'?'ok':(j.status==='running'||j.status==='pending'?'info':'err')}">${esc(labelOf(STATUS_LABELS, j.status))}</span></td><td>${esc(j.log_summary)}</td><td>${esc((j.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">暂无在线更新记录</td></tr>';
 }
 async function checkSystemUpdate() {
   const message = document.getElementById('updateCheckMessage');
@@ -1377,7 +1532,7 @@ async function enableTotp() {
 
 async function loadAlerts() {
   const [chs, evs] = await Promise.all([api('/api/alerts/channels'), api('/api/alerts/events')]);
-  document.getElementById('alertList').innerHTML = `<div class="pill-list" style="margin-bottom:14px;">${chs.map(c=>`<span class="badge info">${esc(c.channel_type)} · ${esc(c.name)}</span>`).join('')||'<span style="color:var(--mute)">尚未配置告警通道</span>'}</div><div class="table-wrap"><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${esc(e.severity)}</span></td><td>${esc(e.category)}</td><td>${esc(e.title)}</td><td>${esc((e.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-state">暂无告警记录</td></tr>'}</tbody></table></div>`;
+  document.getElementById('alertList').innerHTML = `<div class="pill-list" style="margin-bottom:14px;">${chs.map(c=>`<span class="badge info">${esc(labelOf(ALERT_TYPE_LABELS, c.channel_type))} · ${esc(c.name)}</span>`).join('')||'<span style="color:var(--mute)">尚未配置告警通道</span>'}</div><div class="table-wrap"><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${esc(labelOf(SEVERITY_LABELS, e.severity))}</span></td><td>${esc(e.category)}</td><td>${esc(e.title)}</td><td>${esc((e.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-state">暂无告警记录</td></tr>'}</tbody></table></div>`;
 }
 document.getElementById('alertForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/alerts/channels', { method: 'POST', body: JSON.stringify({ channel_type: document.getElementById('aType').value, name: document.getElementById('aName').value.trim(), config: JSON.parse(document.getElementById('aConfig').value) }) }); toast('告警通道已加密保存'); loadAlerts(); });
 async function sendTestAlert() { await api('/api/alerts/test', { method: 'POST' }); toast('测试告警已发送'); loadAlerts(); }
