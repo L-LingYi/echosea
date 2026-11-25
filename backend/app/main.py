@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app.api import alerts, auth, dashboard, memory, onebot, perception, persona, providers, stickers, system_update
 from app.config import Settings, get_settings
 from app.core.alert_service import AlertService
+from app.core.backup_service import BackupService
 from app.core.brain_service import CompanionPipeline
 from app.core.database import DatabaseManager
 from app.core.event_bus import PluginEventBus
@@ -47,6 +48,8 @@ def create_app(
     systemone_caller=None,
     update_http_get=None,
     update_http_post=None,
+    backup_http_client_factory=None,
+    preset_fetcher=None,
 ) -> FastAPI:
     settings = settings_override or get_settings()
 
@@ -120,6 +123,7 @@ def create_app(
             search_caller=search_caller,
         )
         life_schedule = LifeScheduleService()
+        backup_service = BackupService(master_key=settings.master_encryption_key, http_client_factory=backup_http_client_factory)
         update_service = UpdateService(
             current_version=settings.app_version,
             current_commit=settings.app_git_commit,
@@ -178,6 +182,8 @@ def create_app(
         app.state.web_perception = web_perception
         app.state.life_schedule = life_schedule
         app.state.update_service = update_service
+        app.state.backup_service = backup_service
+        app.state.preset_fetcher = preset_fetcher
         app.state.pipeline = pipeline
 
         # 4. Load Built-in Modular Plugins onto Event Bus

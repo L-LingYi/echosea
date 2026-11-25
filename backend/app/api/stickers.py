@@ -125,3 +125,28 @@ async def auto_tag_sticker(
         "emotion_tags": updated.emotion_tags,
         "context_hint": updated.context_hint,
     }
+
+
+@router.get("/presets")
+async def list_sticker_presets(_admin=Depends(get_current_admin)):
+    from app.core.sticker_service import PUBLIC_STICKER_PRESETS
+    return PUBLIC_STICKER_PRESETS
+
+
+@router.post("/presets/import")
+async def import_sticker_preset(
+    body: dict[str, Any],
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    try:
+        return await runtime.sticker_service.import_from_preset(
+            session=session,
+            preset_id=body.get("preset_id"),
+            custom_url=body.get("custom_url"),
+            limit=int(body.get("limit", 80)),
+            fetcher=getattr(runtime, "preset_fetcher", None),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"拉取预设表情包失败：{exc}")

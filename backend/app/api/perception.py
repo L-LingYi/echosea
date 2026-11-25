@@ -33,6 +33,54 @@ async def add_hot_source(body: dict[str, Any], _admin=Depends(get_current_admin)
     return {"ok": True, "id": src.id}
 
 
+HOT_SOURCE_PRESETS = [
+    {"name": "36氪快讯", "category": "tech", "feed_url": "https://36kr.com/feed"},
+    {"name": "少数派", "category": "lifestyle", "feed_url": "https://sspai.com/feed"},
+    {"name": "V2EX 最热", "category": "community", "feed_url": "https://www.v2ex.com/index.xml"},
+    {"name": "机核网", "category": "acg", "feed_url": "https://www.gcores.com/rss"},
+]
+
+
+@router.get("/hot-sources/presets")
+async def list_hot_source_presets(_admin=Depends(get_current_admin)):
+    return HOT_SOURCE_PRESETS
+
+
+@router.patch("/hot-sources/{source_id}")
+async def update_hot_source(
+    source_id: int,
+    body: dict[str, Any],
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+):
+    src = await session.get(HotTopicSource, source_id)
+    if src is None:
+        raise HTTPException(status_code=404, detail="Hot source not found")
+    if "is_enabled" in body:
+        src.is_enabled = bool(body["is_enabled"])
+    if "name" in body and body["name"]:
+        src.name = str(body["name"])
+    if "category" in body and body["category"]:
+        src.category = str(body["category"])
+    if "feed_url" in body and body["feed_url"]:
+        src.feed_url = str(body["feed_url"])
+    await session.flush()
+    return {"ok": True, "id": src.id, "is_enabled": src.is_enabled}
+
+
+@router.delete("/hot-sources/{source_id}")
+async def delete_hot_source(
+    source_id: int,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+):
+    src = await session.get(HotTopicSource, source_id)
+    if src is None:
+        raise HTTPException(status_code=404, detail="Hot source not found")
+    await session.delete(src)
+    return {"ok": True}
+
+
 @router.post("/briefings/refresh")
 async def refresh_briefing(
     _admin=Depends(get_current_admin),
@@ -139,12 +187,90 @@ async def list_backups(_admin=Depends(get_current_admin), session: AsyncSession 
     ]
 
 
+@router.get("/backup-config")
+async def get_backup_config(
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    return await runtime.backup_service.get_safe_config(session)
+
+
+@router.put("/backup-config")
+async def save_backup_config(
+    body: dict[str, Any],
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    return await runtime.backup_service.save_config(session, body)
+
+
+@router.post("/backup-config/oauth-url")
+async def get_aliyun_oauth_url(
+    body: dict[str, Any] | None = None,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    redirect_uri = str((body or {}).get("redirect_uri") or "oob")
+    return await runtime.backup_service.build_aliyun_oauth_url(session, redirect_uri=redirect_uri)
+
+
+@router.post("/backup-config/exchange-code")
+async def exchange_aliyun_oauth_code(
+    body: dict[str, Any],
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    code = str(body.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="请提供授权回调 code")
+    return await runtime.backup_service.exchange_aliyun_code(session, code)
+
+
+@router.post("/backup-config/test")
+async def test_backup_connection(
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    return await runtime.backup_service.test_connection(session)
+
+
 @router.post("/backups/trigger")
 async def trigger_backup_hook(
     body: dict[str, Any] | None = None,
     _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
     runtime=Depends(get_runtime),
 ):
-    payload = body or {"filename": "manual_snapshot.sql.gz", "remote_target": "aliyun_webdav"}
-    res = await runtime.event_bus.emit("on_backup_requested", payload)
-    return {"ok": True, "bus_result": res}
+    body = body or {}
+    custom_name = body.get("filename")
+    try:
+        rec = await runtime.backup_service.run_backup(session, custom_filename=custom_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if rec.status == "failed":
+        await runtime.alert_service.notify(
+            session,
+            severity="critical",
+            category="backup_failure",
+            title=f"异地备份上传失败：{rec.filename}",
+            detail=f"目标：{rec.remote_target}，原因：{rec.error_message or '未知错误'}",
+        )
+    bus_payload = {"filename": rec.filename, "remote_target": rec.remote_target, "status": rec.status}
+    if body.get("simulated_error"):
+        bus_payload["simulated_error"] = body["simulated_error"]
+    bus_res = await runtime.event_bus.emit("on_backup_requested", bus_payload)
+    return {
+        "ok": rec.status == "success",
+        "id": rec.id,
+        "filename": rec.filename,
+        "remote_target": rec.remote_target,
+        "size_bytes": rec.size_bytes,
+        "status": rec.status,
+        "error_message": rec.error_message,
+        "bus_result": bus_res,
+    }

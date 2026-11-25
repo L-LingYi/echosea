@@ -221,3 +221,147 @@ class StickerService:
             asset.context_hint = f"群聊语境：「{context_blob[:60]}」时发出"
         await session.flush()
         return asset
+
+
+    @staticmethod
+    def extract_tags_from_text(text: str) -> list[str]:
+        """Extract lightweight Chinese emotion/meme tags from a description or caption."""
+        keyword_map = (
+            ("大笑", ("大笑", "笑死", "哈哈", "爆笑", "乐", "幽默")),
+            ("震撼", ("震撼", "震惊", "离谱", "惊呆", "懵")),
+            ("无语", ("无语", "无奈", "尴尬", "翻白眼", "摊手", "叹气")),
+            ("可爱", ("可爱", "猫咪", "喵", "萌", "乖巧", "贴贴")),
+            ("疑惑", ("疑惑", "困惑", "好奇", "问号", "不解", "思考")),
+            ("开心", ("开心", "高兴", "快乐", "激动", "点赞", "棒")),
+            ("委屈", ("委屈", "哭", "难过", "伤心", "泪", "悲伤")),
+            ("生气", ("生气", "愤怒", "暴躁", "怒", "打人", "气死")),
+            ("摸鱼", ("摸鱼", "摆烂", "躺平", "睡觉", "困", "疲惫")),
+            ("吃瓜", ("吃瓜", "围观", "看戏", "八卦")),
+            ("吐槽", ("吐槽", "嘲讽", "阴阳", "滑稽", "狗头")),
+        )
+        found: list[str] = []
+        for tag, cues in keyword_map:
+            if any(c in text for c in cues):
+                found.append(tag)
+        return found[:4] or ["斗图"]
+
+    async def import_from_preset(
+        self,
+        session: AsyncSession,
+        preset_id: str | None = None,
+        custom_url: str | None = None,
+        limit: int = 80,
+        fetcher=None,
+    ) -> dict[str, Any]:
+        """Download and import tagged stickers on demand from a public dataset preset or custom JSON/JSONL URL."""
+        import json as _json
+        import httpx as _httpx
+
+        preset = next((p for p in PUBLIC_STICKER_PRESETS if p["id"] == preset_id), None) if preset_id else None
+        target_url = (custom_url or (preset["default_data_url"] if preset else "")).strip()
+        if not target_url:
+            raise ValueError("请指定有效的预设源或自定义 JSON/JSONL 数据地址")
+
+        limit = max(1, min(500, int(limit or 80)))
+        if fetcher is not None:
+            raw_text = await fetcher(target_url)
+        else:
+            async with _httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+                resp = await client.get(target_url, headers={"User-Agent": "EchoSea-StickerImporter/1.4"})
+                resp.raise_for_status()
+                raw_text = resp.text
+
+        # Parse standard JSON (array or wrapped object) first; fall back to multi-line JSONL on JSONDecodeError
+        records: list[dict[str, Any]] = []
+        stripped = raw_text.strip()
+        if stripped:
+            parsed = None
+            try:
+                parsed = _json.loads(stripped)
+            except _json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                records = [r for r in parsed if isinstance(r, dict)]
+            elif isinstance(parsed, dict):
+                for key in ("data", "items", "stickers", "records"):
+                    if isinstance(parsed.get(key), list):
+                        records = [r for r in parsed[key] if isinstance(r, dict)]
+                        break
+                if not records and any(k in parsed for k in ("url", "source_url", "image_url", "img")):
+                    records = [parsed]
+            else:
+                for line in stripped.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                        if isinstance(obj, dict):
+                            records.append(obj)
+                    except Exception:
+                        continue
+
+        # Normalize diverse dataset schemas -> import_manual items
+        normalized: list[dict[str, Any]] = []
+        for rec in records:
+            if len(normalized) >= limit:
+                break
+            url = str(rec.get("url") or rec.get("source_url") or rec.get("image_url") or rec.get("img") or "").strip()
+            if not url or not (url.startswith("http://") or url.startswith("https://")):
+                continue
+            tags_raw = rec.get("emotion_tags") or rec.get("tags") or rec.get("category") or rec.get("label") or []
+            if isinstance(tags_raw, str):
+                tags = [t.strip() for t in tags_raw.replace("，", ",").split(",") if t.strip()]
+            elif isinstance(tags_raw, list):
+                tags = [str(t).strip() for t in tags_raw if str(t).strip()]
+            else:
+                tags = []
+            hint = str(rec.get("context_hint") or rec.get("description") or rec.get("caption") or rec.get("text") or rec.get("name") or "").strip()[:240]
+            if not tags and hint:
+                tags = self.extract_tags_from_text(hint)
+            normalized.append({
+                "source_url": url,
+                "emotion_tags": tags[:6] or ["斗图"],
+                "context_hint": hint or f"来自公开预设源 {preset['name'] if preset else 'custom'}",
+            })
+
+        # Deduplicate against existing source_urls in DB
+        existing_urls = set(
+            (await session.execute(select(StickerAsset.source_url).where(StickerAsset.source_url.is_not(None)))).scalars().all()
+        )
+        fresh = [it for it in normalized if it["source_url"] not in existing_urls]
+        created = await self.import_manual(session, fresh)
+        return {
+            "ok": True,
+            "preset_id": preset_id or "custom",
+            "fetched_count": len(records),
+            "imported_count": len(created),
+            "skipped_duplicates": len(normalized) - len(fresh),
+        }
+
+PUBLIC_STICKER_PRESETS: list[dict[str, Any]] = [
+    {
+        "id": "emo_visual_data",
+        "name": "Emo Visual Data（GLM-4V 标注中文表情包）",
+        "repo_url": "https://github.com/LLM-Red-Team/emo-visual-data",
+        "default_data_url": "https://raw.githubusercontent.com/LLM-Red-Team/emo-visual-data/main/data.json",
+        "description": "18,000+ 张中文表情包视觉标注数据，自带画面与情绪语义说明，最适合 AI 按语境检索斗图。",
+        "recommended_limit": 80,
+    },
+    {
+        "id": "chinese_meme_desc",
+        "name": "Chinese Meme Description（中文表情包图文描述库）",
+        "repo_url": "https://github.com/reilxlx/chinese-meme-description-dataset",
+        "default_data_url": "https://huggingface.co/datasets/REILX/chinese-meme-description-dataset/raw/main/train.jsonl",
+        "description": "高质量中文表情包图文描述集，含画面神态、配字与情绪语境，适合冷启动语义匹配。",
+        "recommended_limit": 80,
+    },
+    {
+        "id": "chinese_bqb",
+        "name": "ChineseBQB（GitHub 经典中文表情包合集）",
+        "repo_url": "https://github.com/zhaoolee/ChineseBQB",
+        "default_data_url": "https://raw.githubusercontent.com/zhaoolee/ChineseBQB/master/chinesebqb_github.json",
+        "description": "按主题分类的经典中文表情包合集，适合作为群聊冷启动图库，导入后可配合 AI 自动补全语境标签。",
+        "recommended_limit": 100,
+    },
+]

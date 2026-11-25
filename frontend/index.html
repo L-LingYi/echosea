@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>小呆呆 Companion System v1.3.6 · 云端意识总控台</title>
+<title>EchoSea（回声海）v1.4.0 · 云端意识总控台</title>
 <style>
   :root {
     --bg: #f4f6fb;
@@ -281,7 +281,7 @@
 <div id="loginView" class="login-wrap">
   <div class="login-card">
     <div class="login-logo">呆</div>
-    <h1>Companion System v1.3.6</h1>
+    <h1>EchoSea · 回声海 v1.4.0</h1>
     <p>SnowLuma 网关 · 记忆意识海 · 云端陪伴总控台</p>
     <form id="loginForm">
       <label>管理员账号</label><input id="loginUser" value="admin" autocomplete="username" required />
@@ -304,7 +304,7 @@
   <aside id="sidebar" class="sidebar">
     <div class="brand">
       <div class="brand-orb">呆</div>
-      <div>Companion System<small>v1.3.6 · SnowLuma &amp; Jev</small></div>
+      <div>EchoSea · 回声海<small>v1.4.0 · SnowLuma &amp; Jev</small></div>
     </div>
     <div class="nav-group">核心观测</div>
     <button class="nav-btn active" data-tab="dashboard">📊 运行仪表盘</button>
@@ -431,6 +431,20 @@
           <button class="btn sm" onclick="loadStickers()">↻ 刷新图库</button>
         </div>
       </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <h3 style="margin:0;">📦 公开表情包预设库（按需拉取，不占仓库体积）</h3>
+          <div class="row-actions">
+            <input id="presetLimit" type="number" min="10" max="500" value="80" style="width:92px;padding:6px 8px;" title="每次拉取数量上限" />
+            <span style="font-size:12px;color:var(--mute);">张 / 次</span>
+          </div>
+        </div>
+        <div class="grid-3" id="stickerPresetGrid">加载预设中...</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+          <input id="customPresetUrl" placeholder="或填入自定义 JSON / JSONL 表情包源 URL（含 url / tags / description 字段）" style="flex:1;min-width:240px;" />
+          <button class="btn sm secondary" onclick="importStickerPreset(null)">拉取自定义源</button>
+        </div>
+      </div>
       <div id="importBox" class="card hidden">
         <h3>📥 手工批量导入（每行：图片URL|情绪标签逗号分隔|语境说明）</h3>
         <textarea id="stickerImportInput" placeholder="https://example.com/laugh.gif|大笑,吐槽|群友说离谱话时斗图"></textarea>
@@ -443,7 +457,23 @@
     <section id="tab-persona" class="hidden">
       <div class="page-head"><div><h2>人设版本与门卫回放评测</h2><div class="page-sub">无损模拟群聊消息流，直观查看每句话的门卫得分与放行理由</div></div></div>
       <div class="grid-2">
-        <div class="card"><h3>✨ 人设版本列表</h3><div id="personaList">加载中...</div></div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <h3 style="margin:0;">✨ 人设版本列表</h3>
+            <button class="btn sm secondary" onclick="document.getElementById('newPersonaForm').classList.toggle('hidden')">＋ 新建人设</button>
+          </div>
+          <form id="newPersonaForm" class="hidden" style="margin-bottom:14px;padding:12px;background:var(--surface-2);border-radius:10px;">
+            <label>版本标识</label><input id="npTag" placeholder="如 echosea_v3" required />
+            <label>角色名字</label><input id="npName" placeholder="如 小呆呆 / 回声" required />
+            <label>小名 / 别名（逗号分隔）</label><input id="npAliases" placeholder="呆呆, 小呆" />
+            <label>System Prompt（人设设定）</label><textarea id="npPrompt" placeholder="描述性格、语气与群聊风格..." required></textarea>
+            <label>违禁 AI 味词（逗号分隔）</label><input id="npBanned" value="作为AI,我理解你的感受,希望这能帮到你" />
+            <div style="margin-top:8px;display:flex;gap:8px;justify-content:flex-end;">
+              <button class="btn sm" type="submit">保存人设</button>
+            </div>
+          </form>
+          <div id="personaList">加载中...</div>
+        </div>
         <div class="card">
           <h3>🧪 门卫回放沙盒</h3>
           <label>软切入阈值 (0.0 - 1.0)</label><input id="simThreshold" type="number" step="0.05" value="0.78" />
@@ -453,6 +483,18 @@
 10003|晚饭吃麻辣烫还是烧烤？</textarea>
           <div style="margin-top:10px;"><button class="btn sm" onclick="runSandbox()">▶ 运行门卫回放</button></div>
           <div id="simResult" style="margin-top:14px;"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>⚙️ 全局 / 群聊运行参数配置</h3>
+        <div class="grid-3">
+          <div><label>作用域</label><select id="cfgScopeType"><option value="global">global（全局默认）</option><option value="group">group（指定群覆盖）</option></select></div>
+          <div><label>目标 ID（全局填 default，群填群号）</label><input id="cfgScopeId" value="default" /></div>
+          <div><label>软切入阈值 (0.3 - 0.95)</label><input id="cfgSoftThr" type="number" step="0.02" value="0.78" /></div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn sm" onclick="saveRuntimeConfig()">保存运行参数</button>
+          <span id="cfgSavedList" style="font-size:12px;color:var(--mute);"></span>
         </div>
       </div>
     </section>
@@ -469,6 +511,19 @@
       <div class="grid-2">
         <div class="card"><h3>📰 今日刷网背景常识</h3><div id="briefingBox" style="white-space:pre-wrap;font-size:13px;color:var(--ink2);background:var(--surface-2);padding:14px;border-radius:10px;">暂无简报</div></div>
         <div class="card"><h3>🕒 24h 作息日程表</h3><div class="table-wrap"><table><thead><tr><th>时段</th><th>当前活动</th><th>心情</th><th>精力</th></tr></thead><tbody id="scheduleTable"></tbody></table></div></div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <h3 style="margin:0;">📡 热点渠道源管理（RSS / Atom / JSON）</h3>
+          <div class="pill-list" id="hotPresetPills"></div>
+        </div>
+        <form id="hotSourceForm" style="display:grid;grid-template-columns:1.2fr 0.8fr 2fr auto;gap:8px;align-items:end;margin-bottom:12px;">
+          <div><label>名称</label><input id="hsName" placeholder="如 36氪快讯" required /></div>
+          <div><label>分类</label><input id="hsCat" placeholder="tech / acg" value="general" /></div>
+          <div><label>订阅地址 (RSS / Feed URL)</label><input id="hsUrl" placeholder="https://36kr.com/feed" required /></div>
+          <button class="btn sm" type="submit">＋ 添加</button>
+        </form>
+        <div class="table-wrap"><table><thead><tr><th>名称</th><th>分类</th><th>地址</th><th>状态</th><th>操作</th></tr></thead><tbody id="hotSourceTable"></tbody></table></div>
       </div>
     </section>
 
@@ -493,9 +548,74 @@
         <p id="updateCheckMessage" aria-live="polite"></p>
         <div class="table-wrap"><table><thead><tr><th>任务 ID</th><th>模式 / 目标</th><th>版本变更</th><th>状态</th><th>摘要</th><th>时间</th></tr></thead><tbody id="updateJobTable"></tbody></table></div>
       </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+          <h3 style="margin:0;">☁️ 异地备份配置（阿里云盘 / WebDAV · 自定义路径）</h3>
+          <div class="row-actions">
+            <button class="btn sm secondary" onclick="testBackupConn()">测试连接</button>
+            <button class="btn sm" onclick="triggerBackup()">💾 立即备份上传</button>
+          </div>
+        </div>
+        <form id="backupConfigForm">
+          <div class="grid-3">
+            <div>
+              <label>备份目标类型</label>
+              <select id="bkProvider" onchange="toggleBackupFields()">
+                <option value="aliyun_openapi">阿里云盘 OpenAPI（OAuth / Refresh Token）</option>
+                <option value="aliyun_webdav">阿里云盘 WebDAV / AList（扫码挂载）</option>
+                <option value="local_only">仅本地打包快照</option>
+              </select>
+            </div>
+            <div><label>自定义远程备份路径</label><input id="bkPath" placeholder="/EchoSea/backups" value="/EchoSea/backups" /></div>
+            <div><label>阿里云盘目标盘区</label><select id="bkDriveType"><option value="backup">备份盘 (backup)</option><option value="resource">资源盘 (resource)</option></select></div>
+          </div>
+          <div id="bkAliyunFields" class="grid-2" style="margin-top:10px;">
+            <div>
+              <label>Refresh Token（获取授权后填入，加密存储，留空保留原值）</label>
+              <input id="bkRefreshToken" type="password" placeholder="粘贴阿里云盘 refresh_token" />
+              <div id="bkAuthBadge" style="margin-top:6px;font-size:12px;color:var(--mute);"></div>
+            </div>
+            <div>
+              <label>开放平台 Client ID / Secret（可选，用于本页直接发起 OAuth 授权）</label>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <input id="bkClientId" placeholder="Client ID（可选）" />
+                <input id="bkClientSecret" type="password" placeholder="Client Secret（可选）" />
+              </div>
+              <div style="display:flex;gap:6px;margin-top:6px;">
+                <button class="btn sm secondary" type="button" onclick="openAliyunOAuth()">获取授权链接</button>
+                <input id="bkOAuthCode" placeholder="粘贴回调 code" style="flex:1;padding:5px 8px;" />
+                <button class="btn sm secondary" type="button" onclick="exchangeAliyunCode()">换取 Token</button>
+              </div>
+            </div>
+          </div>
+          <div id="bkWebdavFields" class="grid-3 hidden" style="margin-top:10px;">
+            <div><label>WebDAV 地址（如 AList / aliyundrive-webdav）</label><input id="bkWdUrl" placeholder="http://127.0.0.1:8080/dav" /></div>
+            <div><label>WebDAV 用户名</label><input id="bkWdUser" placeholder="admin" /></div>
+            <div><label>WebDAV 密码（留空保留原值）</label><input id="bkWdPass" type="password" placeholder="••••••••" /></div>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn sm" type="submit">保存备份配置</button>
+          </div>
+        </form>
+      </div>
       <div class="grid-2">
         <div class="card"><h3>🧩 已加载标准插件</h3><div id="pluginList">加载中...</div></div>
-        <div class="card"><h3>☁️ PostgreSQL 异地备份记录</h3><div id="backupList">加载中...</div></div>
+        <div class="card"><h3>📦 异地备份历史记录</h3><div id="backupList">加载中...</div></div>
+      </div>
+      <div class="card">
+        <h3>🔐 管理员安全设置（密码与 TOTP 二步验证）</h3>
+        <div class="grid-2">
+          <form id="pwdForm">
+            <label>当前密码</label><input id="oldPwd" type="password" required />
+            <label>新密码（至少 8 位）</label><input id="newPwd" type="password" minlength="8" required />
+            <div style="margin-top:8px;"><button class="btn sm secondary" type="submit">修改管理员密码</button></div>
+          </form>
+          <div>
+            <div style="font-size:13px;color:var(--ink2);margin-bottom:8px;">为公网访问开启 TOTP 动态口令（支持 Google Authenticator / 1Password）。</div>
+            <button class="btn sm secondary" onclick="setupTotp()">生成 TOTP 密钥</button>
+            <div id="totpSetupBox" style="margin-top:8px;font-size:12.5px;"></div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -939,7 +1059,17 @@ async function delProvider(id) { if (!confirm('确认删除该模型路由？'))
 
 /* --- 5. Sticker Visual Card Gallery with AI Auto-Tag --- */
 async function loadStickers() {
-  const list = await api('/api/stickers');
+  const [list, presets] = await Promise.all([api('/api/stickers'), api('/api/stickers/presets')]);
+  document.getElementById('stickerPresetGrid').innerHTML = presets.map(p=>`
+    <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--surface-2);display:flex;flex-direction:column;gap:6px;">
+      <div style="font-weight:700;font-size:13.5px;">${esc(p.name)}</div>
+      <div style="font-size:12px;color:var(--ink2);flex:1;">${esc(p.description)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+        <a href="${esc(p.repo_url)}" target="_blank" rel="noopener" style="font-size:12px;color:var(--accent);">查看源仓库 ↗</a>
+        <button class="btn sm" onclick="importStickerPreset('${esc(p.id)}')">按需拉取</button>
+      </div>
+    </div>
+  `).join('');
   document.getElementById('stickerGrid').innerHTML = list.length ? list.map(s=>`
     <div class="sticker-card">
       <div class="sticker-thumb">
@@ -975,11 +1105,42 @@ async function importStickers() {
 }
 async function reviewSticker(id, status) { await api(`/api/stickers/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); loadStickers(); }
 async function delSticker(id) { await api(`/api/stickers/${id}`, { method: 'DELETE' }); loadStickers(); }
+async function importStickerPreset(presetId) {
+  const limit = parseInt(document.getElementById('presetLimit').value || '80', 10);
+  const custom_url = presetId ? null : document.getElementById('customPresetUrl').value.trim();
+  if (!presetId && !custom_url) { toast('请先填写自定义源 URL'); return; }
+  toast('正在从公开预设源拉取表情包...');
+  const r = await api('/api/stickers/presets/import', { method: 'POST', body: JSON.stringify({ preset_id: presetId, custom_url, limit }) });
+  toast(`拉取完成：新增 ${r.imported_count} 张，跳过重复 ${r.skipped_duplicates} 张`);
+  loadStickers();
+}
 
 /* --- 6. Persona & Visual Sandbox --- */
 async function loadPersona() {
-  const list = await api('/api/persona/versions');
-  document.getElementById('personaList').innerHTML = list.map(p=>`<div style="padding:12px 0;border-bottom:1px solid var(--border-soft);"><div style="display:flex;justify-content:space-between;align-items:center;"><strong>${esc(p.version_tag)} · ${esc(p.bot_name)}</strong>${p.is_active?'<span class="badge ok">生效中</span>':''}</div><div class="pill-list" style="margin:6px 0;">${(p.aliases||[]).map(a=>`<span class="badge info">${esc(a)}</span>`).join('')}</div><div style="font-size:13px;color:var(--ink2)">${esc(p.system_prompt)}</div></div>`).join('');
+  const [list, cfgs] = await Promise.all([api('/api/persona/versions'), api('/api/persona/configs')]);
+  document.getElementById('personaList').innerHTML = list.map(p=>`<div style="padding:12px 0;border-bottom:1px solid var(--border-soft);"><div style="display:flex;justify-content:space-between;align-items:center;"><strong>${esc(p.version_tag)} · ${esc(p.bot_name)}</strong>${p.is_active?'<span class="badge ok">生效中</span>':`<button class="btn sm secondary" onclick="activatePersona(${Number(p.id)})">激活</button>`}</div><div class="pill-list" style="margin:6px 0;">${(p.aliases||[]).map(a=>`<span class="badge info">${esc(a)}</span>`).join('')}</div><div style="font-size:13px;color:var(--ink2)">${esc(p.system_prompt)}</div></div>`).join('');
+  document.getElementById('cfgSavedList').textContent = cfgs.length ? ('已保存配置：' + cfgs.map(c=>`${c.scope_type}:${c.scope_id}`).join(' / ')) : '当前使用默认参数';
+}
+async function activatePersona(id) { await api(`/api/persona/versions/${id}/activate`, { method: 'POST' }); toast('已切换生效人设'); loadPersona(); }
+document.getElementById('newPersonaForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await api('/api/persona/versions', { method: 'POST', body: JSON.stringify({
+    version_tag: document.getElementById('npTag').value.trim(),
+    bot_name: document.getElementById('npName').value.trim(),
+    aliases: document.getElementById('npAliases').value.split(',').map(x=>x.trim()).filter(Boolean),
+    system_prompt: document.getElementById('npPrompt').value.trim(),
+    banned_phrases: document.getElementById('npBanned').value.split(',').map(x=>x.trim()).filter(Boolean),
+    activate: true
+  }) });
+  toast('新人设已创建并激活'); document.getElementById('newPersonaForm').reset(); document.getElementById('newPersonaForm').classList.add('hidden'); loadPersona();
+});
+async function saveRuntimeConfig() {
+  await api('/api/persona/configs', { method: 'PUT', body: JSON.stringify({
+    scope_type: document.getElementById('cfgScopeType').value,
+    scope_id: document.getElementById('cfgScopeId').value.trim() || 'default',
+    config: { soft_entry_threshold: parseFloat(document.getElementById('cfgSoftThr').value || '0.78') }
+  }) });
+  toast('运行参数已热生效'); loadPersona();
 }
 async function runSandbox() {
   const lines = document.getElementById('simInput').value.trim().split('\n').filter(Boolean);
@@ -998,15 +1159,40 @@ async function runSandbox() {
 
 /* --- 7. Perception, 8. Ops & Online Update, 9. Alerts --- */
 async function loadPerception() {
-  const [b, sched] = await Promise.all([api('/api/ops/briefings/latest'), api('/api/ops/schedule')]);
+  const [b, sched, sources, presets] = await Promise.all([
+    api('/api/ops/briefings/latest'), api('/api/ops/schedule'), api('/api/ops/hot-sources'), api('/api/ops/hot-sources/presets')
+  ]);
   document.getElementById('briefingBox').textContent = b.digest_text || '暂无今日刷网简报';
   document.getElementById('scheduleTable').innerHTML = sched.map(s=>`<tr><td><code>${Number(s.start_hour)}:00 - ${Number(s.end_hour)}:00</code></td><td>${esc(s.activity)}</td><td><span class="badge info">${esc(s.default_mood)}</span></td><td>${Number(s.energy_target)}</td></tr>`).join('');
+  document.getElementById('hotPresetPills').innerHTML = presets.map(p=>`<button type="button" class="btn sm secondary" onclick="fillHotPreset('${esc(p.name)}','${esc(p.category)}','${esc(p.feed_url)}')">＋ ${esc(p.name)}</button>`).join('');
+  document.getElementById('hotSourceTable').innerHTML = sources.length ? sources.map(s=>`<tr><td><strong>${esc(s.name)}</strong></td><td><span class="badge info">${esc(s.category)}</span></td><td style="font-size:12px;word-break:break-all;">${esc(s.feed_url)}</td><td><span class="badge ${s.is_enabled?'ok':'warn'}">${s.is_enabled?'启用':'停用'}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="toggleHotSource(${Number(s.id)},${!s.is_enabled})">${s.is_enabled?'停用':'启用'}</button><button class="btn sm danger" onclick="delHotSource(${Number(s.id)})">删除</button></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">尚未配置热点渠道，点击上方预设或填写 RSS 地址添加</td></tr>';
 }
+function fillHotPreset(name, cat, url) { document.getElementById('hsName').value=name; document.getElementById('hsCat').value=cat; document.getElementById('hsUrl').value=url; }
+document.getElementById('hotSourceForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await api('/api/ops/hot-sources', { method: 'POST', body: JSON.stringify({ name: document.getElementById('hsName').value.trim(), category: document.getElementById('hsCat').value.trim()||'general', feed_url: document.getElementById('hsUrl').value.trim(), is_enabled: true }) });
+  toast('热点渠道已添加'); document.getElementById('hotSourceForm').reset(); loadPerception();
+});
+async function toggleHotSource(id, en) { await api(`/api/ops/hot-sources/${id}`, { method: 'PATCH', body: JSON.stringify({ is_enabled: en }) }); loadPerception(); }
+async function delHotSource(id) { await api(`/api/ops/hot-sources/${id}`, { method: 'DELETE' }); loadPerception(); }
 async function refreshBriefing() { const r = await api('/api/ops/briefings/refresh', { method: 'POST' }); toast(r.ok ? '简报已更新' : r.message); loadPerception(); }
 async function syncSchedule() { const r = await api('/api/ops/schedule/sync', { method: 'POST', body: '{}' }); toast(`状态已更新：${r.current_activity} (${r.mood})`); }
 
+function toggleBackupFields() {
+  const mode = document.getElementById('bkProvider').value;
+  document.getElementById('bkAliyunFields').classList.toggle('hidden', mode !== 'aliyun_openapi');
+  document.getElementById('bkWebdavFields').classList.toggle('hidden', mode !== 'aliyun_webdav');
+}
 async function loadOps() {
-  const [pl, bk, upd] = await Promise.all([api('/api/ops/plugins'), api('/api/ops/backups'), api('/api/system/update/status')]);
+  const [pl, bk, upd, bkCfg] = await Promise.all([api('/api/ops/plugins'), api('/api/ops/backups'), api('/api/system/update/status'), api('/api/ops/backup-config')]);
+  document.getElementById('bkProvider').value = bkCfg.provider || 'aliyun_openapi';
+  document.getElementById('bkPath').value = bkCfg.remote_path || '/EchoSea/backups';
+  document.getElementById('bkDriveType').value = bkCfg.aliyun_drive_type || 'backup';
+  document.getElementById('bkClientId').value = bkCfg.aliyun_client_id || '';
+  document.getElementById('bkWdUrl').value = bkCfg.webdav_url || '';
+  document.getElementById('bkWdUser').value = bkCfg.webdav_username || '';
+  document.getElementById('bkAuthBadge').innerHTML = bkCfg.aliyun_authorized ? `<span class="badge ok">已授权 (${esc(bkCfg.aliyun_refresh_token_masked)})</span>` : '<span class="badge warn">未授权：请填入 Refresh Token 或改用 WebDAV 模式</span>';
+  toggleBackupFields();
   document.getElementById('pluginList').innerHTML = pl.loaded_plugins.map(p=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);"><strong>${esc(p.name)}</strong> <span class="badge info">v${esc(p.version)}</span> <span style="font-size:12px;color:var(--mute);">超时 ${Number(p.timeout_seconds)}s</span><div style="font-size:12.5px;color:var(--ink2);margin-top:3px;">${esc(p.description)}</div></div>`).join('');
   document.getElementById('backupList').innerHTML = bk.length ? bk.map(b=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;"><span><strong>${esc(b.filename)}</strong> → ${esc(b.remote_target)}</span><span class="badge ${b.status==='success'?'ok':'err'}">${esc(b.status)}</span></div>`).join('') : '<div class="empty-state">暂无备份记录</div>';
   const modeLabel = upd.mode === 'github_public' ? `GitHub 公开仓库 (${esc(upd.github_repo)})` : '本地仓库模式';
@@ -1046,7 +1232,60 @@ async function triggerSystemUpdate() {
   }
 }
 async function runReflection() { const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' }); toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}`); }
-async function triggerBackup() { await api('/api/ops/backups/trigger', { method: 'POST', body: '{}' }); toast('已触发备份钩子'); loadOps(); }
+document.getElementById('backupConfigForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await api('/api/ops/backup-config', { method: 'PUT', body: JSON.stringify({
+    provider: document.getElementById('bkProvider').value,
+    remote_path: document.getElementById('bkPath').value.trim() || '/EchoSea/backups',
+    aliyun_drive_type: document.getElementById('bkDriveType').value,
+    aliyun_client_id: document.getElementById('bkClientId').value.trim(),
+    aliyun_client_secret: document.getElementById('bkClientSecret').value.trim() || undefined,
+    aliyun_refresh_token: document.getElementById('bkRefreshToken').value.trim() || undefined,
+    webdav_url: document.getElementById('bkWdUrl').value.trim(),
+    webdav_username: document.getElementById('bkWdUser').value.trim(),
+    webdav_password: document.getElementById('bkWdPass').value.trim() || undefined
+  }) });
+  document.getElementById('bkRefreshToken').value = '';
+  document.getElementById('bkClientSecret').value = '';
+  document.getElementById('bkWdPass').value = '';
+  toast('异地备份配置已加密保存'); loadOps();
+});
+async function openAliyunOAuth() {
+  const r = await api('/api/ops/backup-config/oauth-url', { method: 'POST', body: '{}' });
+  if (!r.ok) { toast(r.error || '请先保存 Client ID'); return; }
+  window.open(r.authorize_url, '_blank', 'noopener');
+}
+async function exchangeAliyunCode() {
+  const code = document.getElementById('bkOAuthCode').value.trim();
+  if (!code) { toast('请先粘贴回调 code'); return; }
+  const r = await api('/api/ops/backup-config/exchange-code', { method: 'POST', body: JSON.stringify({ code }) });
+  toast(r.ok ? '阿里云盘授权成功，已加密保存 Refresh Token' : (r.error || '换取失败'));
+  loadOps();
+}
+async function testBackupConn() {
+  toast('正在测试远程备份连接...');
+  const r = await api('/api/ops/backup-config/test', { method: 'POST' });
+  toast(r.ok ? r.message : ('连接失败：' + (r.error || '未知错误')));
+}
+async function triggerBackup() {
+  toast('正在打包并上传异地备份...');
+  const r = await api('/api/ops/backups/trigger', { method: 'POST', body: '{}' });
+  toast(r.ok ? `备份成功：${r.filename} (${Math.max(1,Math.round((r.size_bytes||0)/1024))} KB)` : `备份失败：${r.error_message || '请检查配置'}`);
+  loadOps();
+}
+document.getElementById('pwdForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await api('/api/auth/password', { method: 'POST', body: JSON.stringify({ old_password: document.getElementById('oldPwd').value, new_password: document.getElementById('newPwd').value }) });
+  toast('管理员密码已更新'); document.getElementById('pwdForm').reset();
+});
+async function setupTotp() {
+  const r = await api('/api/auth/totp/setup', { method: 'POST' });
+  document.getElementById('totpSetupBox').innerHTML = `密钥：<code>${esc(r.secret)}</code><div style="display:flex;gap:6px;margin-top:6px;"><input id="totpVerifyCode" placeholder="输入 6 位验证码" style="width:150px;" /><button class="btn sm" onclick="enableTotp()">确认开启</button></div>`;
+}
+async function enableTotp() {
+  await api('/api/auth/totp/enable', { method: 'POST', body: JSON.stringify({ code: document.getElementById('totpVerifyCode').value.trim() }) });
+  toast('TOTP 二步验证已开启'); document.getElementById('totpSetupBox').innerHTML = '<span class="badge ok">已开启二步验证</span>';
+}
 
 async function loadAlerts() {
   const [chs, evs] = await Promise.all([api('/api/alerts/channels'), api('/api/alerts/events')]);

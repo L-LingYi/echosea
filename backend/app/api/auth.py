@@ -100,11 +100,19 @@ async def setup_totp(
     admin: AdminUser = Depends(get_current_admin),
     runtime=Depends(get_runtime),
 ):
+    """Generate a pending TOTP secret without modifying or disabling any currently active 2FA."""
+    import time as _time
     secret = generate_totp_secret()
-    admin.totp_secret_enc = encrypt_secret(secret, runtime.settings.master_encryption_key)
-    admin.totp_enabled = False
+    pending = getattr(runtime, "pending_totp_secrets", None)
+    if pending is None:
+        pending = {}
+        runtime.pending_totp_secrets = pending
+    pending[admin.id] = {
+        "secret_enc": encrypt_secret(secret, runtime.settings.master_encryption_key),
+        "expires_at": _time.time() + 600.0,
+    }
     uri = get_totp_provisioning_uri(secret, admin.username)
-    return {"secret": secret, "provisioning_uri": uri}
+    return {"secret": secret, "provisioning_uri": uri, "pending": True, "totp_enabled": admin.totp_enabled}
 
 
 @router.post("/totp/enable")
@@ -113,10 +121,22 @@ async def enable_totp(
     admin: AdminUser = Depends(get_current_admin),
     runtime=Depends(get_runtime),
 ):
-    if not admin.totp_secret_enc:
+    """Verify 6-digit code against pending TOTP secret, then atomically activate it."""
+    import time as _time
+    pending_map = getattr(runtime, "pending_totp_secrets", None) or {}
+    pending = pending_map.get(admin.id)
+    candidate_enc: str | None = None
+    if pending and float(pending.get("expires_at", 0.0)) >= _time.time():
+        candidate_enc = str(pending["secret_enc"])
+    elif admin.totp_secret_enc and not admin.totp_enabled:
+        candidate_enc = admin.totp_secret_enc
+
+    if not candidate_enc:
         raise HTTPException(status_code=400, detail="Run /totp/setup first")
-    secret = decrypt_secret(admin.totp_secret_enc, runtime.settings.master_encryption_key)
+    secret = decrypt_secret(candidate_enc, runtime.settings.master_encryption_key)
     if not verify_totp_code(secret, str(body.get("code", ""))):
         raise HTTPException(status_code=400, detail="Invalid TOTP verification code")
+    admin.totp_secret_enc = candidate_enc
     admin.totp_enabled = True
+    pending_map.pop(admin.id, None)
     return {"ok": True, "totp_enabled": True}

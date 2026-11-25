@@ -1,3 +1,12 @@
+## v1.4.0 (2026-11-25) — EchoSea（回声海）公开版升级
+- **品牌更名**：正式更名为 **EchoSea（回声海）**（保留底层数据库与环境变量向后兼容，升级无痛）。
+- **公开表情包预设库（WebUI 按需拉取）**：新增 `GET /api/stickers/presets` 与 `POST /api/stickers/presets/import`，在「表情包图库」内置 `emo-visual-data`、`chinese-meme-description-dataset`、`ChineseBQB` 与自定义 JSON/JSONL 源一键按需拉取（自动去重与标签写入，不撑爆 Git 仓库）。
+- **阿里云盘异地备份与自定义路径**：新增 `BackupService` 与完整 WebUI 配置入口，支持「阿里云盘 OpenAPI（OAuth2 授权 / Refresh Token）」「阿里云盘 WebDAV / AList」与「本地快照」三种模式，支持自定义远程目录（如 `/EchoSea/backups`）、一键测试连接与真实快照压缩上传。
+- **前端缺失配置全面补全**：
+  - 「热点简报与日程」新增**热点渠道源管理**（列表、新增、启停、删除、常用中文源预设）。
+  - 「人设与回放评测」新增**新建人设版本**表单与**全局/群聊运行参数**可视化配置（对接 `SystemConfig`）。
+  - 「运维、插件与更新」新增**管理员安全设置**（修改密码与 TOTP 二步验证绑定入口）。
+
 ## v1.3.6 (2026-11-25)
 - **TTS Character-Count Usage Tracking**: Added `today_chars` and `total_chars` (Unicode character count of `cleaned_text` for synthesized TTS deliveries) to `/api/dashboard/overview` and `by_slot` (`unit: "chars"`), and updated the WebUI Dashboard TTS KPI card and slot breakdown table to report voice synthesis consumption in characters.
 

@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Core App
-    app_name: str = "Companion System"
-    app_version: str = "1.3.6"
+    app_name: str = "EchoSea（回声海）"
+    app_version: str = "1.4.0"
     environment: str = "production"
     log_level: str = "INFO"
 

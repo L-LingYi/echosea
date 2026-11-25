@@ -117,7 +117,7 @@ def test_full_fastapi_cloud_console_and_snowluma_e2e():
     with TestClient(app) as client:
         # 1. Health & WebUI index
         assert client.get("/healthz").status_code == 200
-        assert "Companion System" in client.get("/").text
+        assert "EchoSea" in client.get("/").text
 
         # 2. Unauthorized access rejected
         assert client.get("/api/dashboard/overview").status_code == 401
