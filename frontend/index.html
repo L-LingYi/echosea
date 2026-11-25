@@ -6,6 +6,7 @@
 <title>EchoSea（回声海）v1.4.2 · 云端意识总控台</title>
 <style>
   :root {
+    color-scheme: light;
     --bg: #f4f6fb;
     --surface: #ffffff;
     --surface-2: #f8fafc;
@@ -17,6 +18,8 @@
     --accent: #4f46e5;
     --accent-2: #2563eb;
     --accent-soft: #eef2ff;
+    --purple-bg: #f3e8ff;
+    --purple-ink: #7e22ce;
     --ok: #10b981;
     --ok-bg: #ecfdf5;
     --ok-ink: #047857;
@@ -36,6 +39,7 @@
     --shadow-lg: 0 24px 60px rgba(2, 6, 23, .24);
   }
   [data-theme="dark"] {
+    color-scheme: dark;
     --bg: #0b1120;
     --surface: #111827;
     --surface-2: #1e293b;
@@ -47,6 +51,8 @@
     --accent: #818cf8;
     --accent-2: #60a5fa;
     --accent-soft: rgba(99, 102, 241, .18);
+    --purple-bg: rgba(168, 85, 247, .18);
+    --purple-ink: #c084fc;
     --ok-bg: rgba(16, 185, 129, .16);
     --ok-ink: #34d399;
     --warn-bg: rgba(245, 158, 11, .16);
@@ -55,14 +61,27 @@
     --danger-ink: #f87171;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .25);
     --shadow: 0 6px 24px rgba(0, 0, 0, .35);
+    --shadow-lg: 0 24px 60px rgba(0, 0, 0, .55);
   }
   [data-theme="dark"] code { background: #1e293b; color: #e2e8f0; }
   [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea {
     background: #0f172a; color: var(--ink); border-color: var(--border);
   }
+  [data-theme="dark"] input::placeholder, [data-theme="dark"] textarea::placeholder { color: #64748b; }
+  [data-theme="dark"] input[type="file"]::file-selector-button {
+    background: var(--surface-2); color: var(--ink2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
   [data-theme="dark"] .login-card { background: #111827; border-color: #334155; color: var(--ink); }
-  [data-theme="dark"] .modal-box { background: #111827; border-color: #334155; }
-  [data-theme="dark"] tr:hover td { background: rgba(255,255,255,.03); }
+  [data-theme="dark"] .mobile-bottom-nav { background: rgba(17, 24, 39, .94); }
+  [data-theme="dark"] .seg-bar { background: #0f172a; border: 1px solid var(--border); }
+  [data-theme="dark"] .seg-btn.active { background: var(--surface-2); color: var(--accent); box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
+  [data-theme="dark"] .progress-track { background: #1e293b; }
+  [data-theme="dark"] .btn.secondary { background: var(--surface-2); color: var(--ink2); border-color: var(--border); }
+  [data-theme="dark"] .btn.secondary:hover { background: #263449; border-color: #475569; color: var(--ink); }
+  [data-theme="dark"] .provider-card:hover { border-color: rgba(129, 140, 248, .5); }
+  [data-theme="dark"] .modal-box { background: var(--surface); border-color: #334155; }
+  [data-theme="dark"] tbody tr:hover { background: rgba(255, 255, 255, .04); }
+  [data-theme="dark"] .toast { background: #1e293b; border: 1px solid #334155; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     margin: 0; padding: 0; background: var(--bg); color: var(--ink);
@@ -186,7 +205,7 @@
   .badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
   .badge.err { background: var(--danger-bg); color: var(--danger-ink); }
   .badge.info { background: var(--accent-soft); color: var(--accent); }
-  .badge.purple { background: #f3e8ff; color: #7e22ce; }
+  .badge.purple { background: var(--purple-bg); color: var(--purple-ink); }
   .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
 
   /* Buttons & Inputs */
@@ -219,7 +238,7 @@
 
   /* Provider Cards & Sticker Visual Gallery */
   .provider-card {
-    background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
     display: flex; flex-direction: column; gap: 10px; transition: .18s;
   }
   .provider-card:hover { border-color: #c7d2fe; box-shadow: var(--shadow); }
@@ -243,7 +262,7 @@
   }
   .modal-box {
     width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto;
-    background: #fff; border-radius: 18px; padding: 24px 26px; box-shadow: var(--shadow-lg);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 24px 26px; box-shadow: var(--shadow-lg);
   }
   .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .modal-head h3 { margin: 0; font-size: 18px; }
@@ -1050,7 +1069,7 @@ async function loadProviders() {
         <span class="badge purple">${esc(p.protocol)}</span>
         <code>${esc(p.api_key_masked||'(空)')}</code>
       </div>
-      ${p.cooldown_active ? `<div style="font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:6px 8px;">已切备路：${esc(p.cooldown_reason||'冷却保护中')}，到期自动试探回切</div>` : ''}
+      ${p.cooldown_active ? `<div style="font-size:11.5px;color:var(--warn-ink);background:var(--warn-bg);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:6px 8px;">已切备路：${esc(p.cooldown_reason||'冷却保护中')}，到期自动试探回切</div>` : ''}
       <div class="row-actions" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--border-soft);">
         <button class="btn sm secondary" onclick="editProvider(${Number(p.id)})">编辑</button>
         <button class="btn sm secondary" onclick="testProvider(${Number(p.id)})">测活</button>
