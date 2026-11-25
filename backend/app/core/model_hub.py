@@ -77,7 +77,7 @@ class ModelHubService:
                 base_url=data["base_url"].rstrip("/"),
                 model_name=data["model_name"],
                 api_key_enc=encrypt_secret(raw_key, self.master_key),
-                extra_config=data.get("extra_config", {}),
+                extra_config=data.get("extra_config") or {},
                 rate_limit_rpm=data.get("rate_limit_rpm", 60),
                 timeout_seconds=data.get("timeout_seconds", 30),
                 price_input_per_1m=data.get("price_input_per_1m", 0.0),
@@ -94,7 +94,8 @@ class ModelHubService:
         existing.model_name = data["model_name"]
         if raw_key:
             existing.api_key_enc = encrypt_secret(raw_key, self.master_key)
-        existing.extra_config = data.get("extra_config", existing.extra_config)
+        if data.get("extra_config") is not None:
+            existing.extra_config = data["extra_config"]
         existing.rate_limit_rpm = data.get("rate_limit_rpm", existing.rate_limit_rpm)
         existing.timeout_seconds = data.get("timeout_seconds", existing.timeout_seconds)
         existing.price_input_per_1m = data.get("price_input_per_1m", existing.price_input_per_1m)

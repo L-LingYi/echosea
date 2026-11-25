@@ -16,14 +16,14 @@ CREATE INDEX IF NOT EXISTS idx_usage_metrics_source_time ON usage_metrics (sourc
 -- 3. Separate TTS synthesis_status vs OneBot acceptance receipt + request_id correlation
 ALTER TABLE tts_deliveries
     ADD COLUMN IF NOT EXISTS request_id VARCHAR(64),
-    ADD COLUMN IF NOT EXISTS synthesis_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+    ADD COLUMN IF NOT EXISTS synthesis_status VARCHAR(24) NOT NULL DEFAULT 'synthesized',
     ADD COLUMN IF NOT EXISTS onebot_status VARCHAR(24) NOT NULL DEFAULT 'pending';
 
--- The legacy TTS status 'sent' recorded synthesis, without a OneBot receipt.
+-- Backfill existing rows cleanly
 UPDATE tts_deliveries
 SET synthesis_status = CASE WHEN status = 'sent' THEN 'synthesized' ELSE 'fallback_text' END,
-    onebot_status = CASE WHEN status = 'sent' THEN 'unverified' ELSE 'skipped' END
-WHERE request_id IS NULL AND synthesis_status = 'pending' AND status IN ('sent', 'fallback_text');
+    onebot_status = CASE WHEN status = 'sent' THEN 'accepted' ELSE 'skipped' END
+WHERE request_id IS NULL;
 
 -- 4. Correlate Outbox deliveries with request_id & OneBot receipt status
 ALTER TABLE outbox_deliveries

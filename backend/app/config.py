@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "Companion System"
-    app_version: str = "1.1.0"
+    app_version: str = "1.2.0"
     environment: str = "production"
     log_level: str = "INFO"
 
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     snowluma_ws_url: str = "ws://snowluma:3001/"
     snowluma_http_url: str = "http://snowluma:3000"
     snowluma_access_token: str = ""
-    snowluma_http_access_token: str = ""
+    snowluma_http_token: str = ""  # Optional independent HTTP API token
     bot_qq: int = 0
     admin_qq: int = 0
 
@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     ambient_summary_trigger_count: int = 20
     dm_bridge_window_minutes: int = 30
     plugin_timeout_seconds: float = 5.0
+
+    # Industry-Standard Online Update (Privilege-Separated Host Updater Daemon)
+    app_git_commit: str = ""
+    update_github_repo: str = ""          # e.g. 'username/companion-system' once public; empty = local_repo mode
+    update_git_branch: str = "main"
+    update_agent_url: str = ""            # e.g. 'http://host.docker.internal:9099'
+    update_webhook_secret: str = ""       # Shared HMAC-SHA256 secret with host_updater.py
 
     # Graceful shutdown
     shutdown_drain_timeout_seconds: float = 15.0

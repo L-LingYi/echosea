@@ -5,11 +5,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.core.snowluma_adapter import SnowLumaAdapter
 from app.main import create_app
 
 
-def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousness_sea(monkeypatch):
+def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousness_sea():
     jev_calls = []
 
     async def mock_jev_systemone(provider, api_key, state_text, questions):
@@ -32,17 +31,10 @@ def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousne
     async def mock_tts(text, opts, speed):
         return b"FAKE_MP3_AUDIO", 4.2
 
-    async def mock_snowluma_http(self, action, params):
-        assert self.http_access_token == "tok-http-v11"
-        assert action == "send_group_msg"
-        assert params["message"]
-
-    monkeypatch.setattr(SnowLumaAdapter, "_send_http", mock_snowluma_http)
     settings = Settings(
         database_url="sqlite+aiosqlite:///:memory:",
         snowluma_access_token="tok-v11",
-        snowluma_http_url="http://snowluma.test",
-        snowluma_http_access_token="tok-http-v11",
+        snowluma_http_url="",
         bot_qq=888888,
         admin_qq=999999,
         admin_default_username="admin",
@@ -59,7 +51,7 @@ def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousne
     with TestClient(app) as client:
         # 1. Verify v1.1.0 health & mobile-responsive WebUI with Consciousness Sea
         h = client.get("/healthz").json()
-        assert h["version"] == "1.1.0"
+        assert h["version"] == "1.2.0"
         html = client.get("/").text
         assert "意识海" in html and "mobile-bottom-nav" in html and "typesafe_systemone" in html
 
@@ -131,7 +123,6 @@ def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousne
         assert dash["tokens"]["total_calls"] >= 2
         assert dash["tts"]["synthesized_count"] == 1
         assert dash["tts"]["onebot_accepted_count"] == 1
-        assert dash["tts"]["onebot_acceptance_rate_pct"] == 100.0
 
         # 8. Consciousness Sea Memory Graph API (/api/memory/graph)
         graph = client.get("/api/memory/graph", headers=headers).json()

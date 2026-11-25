@@ -1,15 +1,13 @@
 # Changelog
 
-## [1.1.0] - 2026-11-25
-
-### Fixed (基于线上运行诊断 `小呆呆运行诊断-20261125`)
-- **数据库 Schema 对齐与老库无损迁移**：在 `db/init.sql` 补齐 `memory_episodes.embedding_json` 字段，新增幂等迁移脚本 `db/migrations_v1_1.sql` 并在 PostgreSQL 启动时自动安全执行，彻底消除新老库字段差异。
-- **探针流量与生产指标彻底隔离**：为 `usage_metrics` 新增 `source`（`production` / `probe` / `sandbox` / `reflection`）字段；仪表盘延迟、P95 TTFT 与费用统计自动排除健康探针样本，并在真实调用成功时自动刷新 `last_health_status = 'healthy'`（解决模型探针长期显示 `unknown` 的问题）。
-- **TTS 合成与 OneBot 受理状态拆分**：在 `tts_deliveries` 中拆分 `synthesis_status`（音频合成）与 `onebot_status`（OneBot 受理回执），并关联 `request_id` 与 `onebot_echo`。
+## [1.2.0] - 2026-11-25
 
 ### Added
-- **统一 `request_id` 全链路脱敏追踪**：新增 `pipeline_traces` 表与 `/api/dashboard/traces` 接口，用同一 `request_id` 串联 `inbound -> gatekeeper -> main_brain -> tts -> onebot` 各阶段耗时与状态，运维日志绝不打印聊天正文。
-- **TypeSafe AI Jev 原生门卫协议支持**：在模型总控中心新增 `typesafe_systemone` 协议（原生调用 `POST /v1/systemone` 的 `state` + `questions` 结构并解析校准概率），同时将 `gatekeeper` 槽位正式接入主链路（支持 OpenAI 兼容小模型作为备用路由）。
-- **门卫与语音意图标注回归评测**：新增 `POST /api/persona/sandbox/benchmark`，支持使用标注群聊样本批量统计误接（FP）、漏接（FN）与语音意图误判率。
-- **意识海（Consciousness Sea）记忆可视化图谱**：新增 `GET /api/memory/graph` 与 WebUI 交互式星海力导向图，直观呈现 L5 自我核心、群聊域、L4 熟人卡、L2 边缘旁听、L3 群情景与私聊半隔离边界、L4 群黑话的关联脉络。
-- **WebUI 全面美化与手机端适配**：新增移动端顶部栏、抽屉菜单、底部快捷导航栏、响应式 2×2 KPI 卡片、横向滚动表格与触控手势支持。
+- **行业规范级在线更新架构（权限隔离 + HMAC-SHA256 签名 + 失败自动回滚）**：
+  - `companion-core` 容器零挂载 `docker.sock`，通过 HMAC-SHA256 签名 + 60 秒防重放时间戳与宿主机轻量更新守护进程（`ops/updater/host_updater.py` + `systemd` 单元）通信。
+  - 同时兼容**当前本地仓库模式**与**后期 GitHub 公开仓库模式**（仅需在 `.env` 填入 `UPDATE_GITHUB_REPO=用户名/仓库名` 即可自动检测 GitHub Releases/Commits）。
+  - 宿主机更新守护进程在升级前记录旧 Commit，重建 `companion-core` 后轮询 `/healthz`，超时或失败时**自动 `git reset --hard` 回滚并重建**，同时回调 Core 记录审计日志并触发告警。
+  - WebUI「🧩 运维、插件与更新」页新增「🔄 系统在线更新」面板，支持手机/桌面一键检查更新、触发更新与查看历史审计记录。
+
+## [1.1.1] - 2026-11-25
+- 合并「记忆意识海」统一菜单；完成运维反馈的 6 项现网加固（`127.0.0.1` 回环绑定、`docker-compose.override.yml.example`、事务全量 SQL 迁移、语音三态与失败回退文字、引用会话范围校验、前端全量 XSS 转义、`PATCH /api/providers/{id}` 与 `extra_config` 保护）。

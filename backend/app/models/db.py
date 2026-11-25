@@ -363,3 +363,23 @@ class PipelineTrace(Base):
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class UpdateJob(Base):
+    """Audit trail for online self-updates (local repo or GitHub public repo) with rollback tracking."""
+
+    __tablename__ = "update_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_uid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    triggered_by: Mapped[str] = mapped_column(String(64), default="admin", nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), default="local_repo", nullable=False)
+    target_ref: Mapped[str] = mapped_column(String(128), default="main", nullable=False)
+    from_version: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    from_commit: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    to_commit: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
+    rolled_back: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    log_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

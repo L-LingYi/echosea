@@ -18,8 +18,6 @@ class MessageEnvelope(BaseModel):
     raw_text: str = ""
     reply_to_msg_id: str | None = None
     expanded_reply_text: str | None = None
-    quoted_text: str | None = None
-    quoted_sender_qq: int | None = None
     mentioned_qqs: list[int] = Field(default_factory=list)
     mentions_all: bool = False
     media_meta: list[dict[str, Any]] = Field(default_factory=list)
@@ -69,7 +67,7 @@ class ModelProviderUpsert(BaseModel):
     base_url: str
     model_name: str
     api_key: str = ""  # Empty means keep existing key on update
-    extra_config: dict[str, Any] = Field(default_factory=dict)
+    extra_config: dict[str, Any] | None = None
     rate_limit_rpm: int = 60
     timeout_seconds: int = 30
     price_input_per_1m: float = 0.0
@@ -149,3 +147,17 @@ class SandboxReplayRequest(BaseModel):
     messages: list[dict[str, Any]]
     override_aliases: list[str] | None = None
     override_soft_entry_threshold: float | None = None
+
+
+class ModelProviderPatch(BaseModel):
+    name: str | None = None
+    protocol: str | None = None
+    base_url: str | None = None
+    model_name: str | None = None
+    api_key: str | None = None
+    extra_config: dict[str, Any] | None = None
+    rate_limit_rpm: int | None = None
+    timeout_seconds: int | None = None
+    price_input_per_1m: float | None = None
+    price_output_per_1m: float | None = None
+    is_enabled: bool | None = None

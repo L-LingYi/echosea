@@ -1,0 +1,13 @@
+# Example local production override (DO NOT commit docker-compose.override.yml to Git)
+# Copy to docker-compose.override.yml on the server to attach external SnowLuma Docker network
+# without being overwritten by future Git releases.
+services:
+  companion-core:
+    networks:
+      - companion_net
+      - snowluma_net
+
+networks:
+  snowluma_net:
+    external: true
+    name: ${SNOWLUMA_DOCKER_NETWORK:-snowluma_default}

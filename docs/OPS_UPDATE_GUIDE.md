@@ -1,31 +1,70 @@
-# Companion System v1.1.0 运维更新指南
+# 运维 Git 提交与线上升级指南（v1.1.1）
 
-在本地仓库中保留升级前的基线标签，并提交发行包和当前部署所需的兼容修正。用 `git archive` 从已验证的提交生成部署包。仓库配置了远程时，可按现有流程推送。
+本压缩包为 **Git 提交就绪版**，默认仅绑定 `127.0.0.1:${APP_PORT:-8000}:8000` 并通过 `.gitignore` 保护现网 `.env` 与 `docker-compose.override.yml`，避免覆盖现网 Nginx / SnowLuma 外部网络配置。
 
-## 升级现有 Docker Compose 部署
+> **停机提示**：现网为单 `companion-core` 实例，重建容器期间会有数秒短暂中断（并非零停机），建议避开群聊高峰窗口执行。
 
-1. 在现有部署目录记录 Core 的镜像 ID，并给该镜像打回滚标签。备份源码文件，用 `pg_dump --format=custom` 备份 PostgreSQL，再用 `pg_restore --list` 检查备份。
-2. 解包并核对变更。保留服务器的 `.env`、现有 Compose 项目名和数据库、Redis、表情包数据卷。香港云部署使用本机回环端口、外部网络 `astrbot-napcat_astrbot_network`、SnowLuma 正向 WebSocket 及单独的 HTTP 出站 Token。
-3. 构建新镜像后，仅重建 Core。单实例切换时会短暂中断请求，SnowLuma 正向 WebSocket 随应用启动重新连接。
+## 1. 同步到 Git 仓库（保留现网配置）
 
 ```bash
-docker compose config --quiet
-docker compose build companion-core
-docker compose up -d --no-deps --no-build --force-recreate --wait companion-core
-docker compose ps
-curl --fail --silent --show-error http://127.0.0.1:8000/healthz
+unzip -o companion-system-v1.1.1-git-release.zip -d /tmp/release_v1_1_1
+rsync -av \
+  --exclude='.env' --exclude='.env.*' \
+  --exclude='docker-compose.override.yml' \
+  --exclude='backups/' --exclude='data/' --exclude='logs/' \
+  /tmp/release_v1_1_1/companion-system/ ./
+
+git status
+git add -A
+git commit -m "fix(v1.1.1): unify Memory Sea UI, harden XSS/quote scope, 3-state TTS fallback, safe SQL migrations & PATCH providers"
+git push origin main
 ```
 
-Core 启动时会在 PostgreSQL 事务中执行 `db/migrations_v1_1.sql`，脚本支持重复执行。如需提前迁移，可执行以下命令。
+## 2. 现网 SnowLuma 外部网络接入（一次性配置，不再被发版覆盖）
+
+如现网通过外部 Docker 网络与 SnowLuma 互通，复制 `docker-compose.override.yml.example` 为 `docker-compose.override.yml`（已被 `.gitignore` 忽略），填入实际网络名；如 HTTP API 使用独立令牌，在 `.env` 中配置 `SNOWLUMA_HTTP_TOKEN`。
+
+## 3. 数据库幂等升级与重建容器
+
+Core 启动时会在 PostgreSQL 事务中安全执行整份 `db/migrations_v1_1.sql`（已修复注释行跳过问题），也可提前手动校验：
 
 ```bash
-docker compose exec -T postgres sh -ec 'psql -X -v ON_ERROR_STOP=1 --single-transaction -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < db/migrations_v1_1.sql
+docker exec -i companion-postgres psql -U companion -d companion < db/migrations_v1_1.sql
+docker compose up -d --build companion-core
 ```
 
-## 验收与回滚
+## 4. 切换后可靠验收命令（不依赖 INFO 日志）
 
-1. 核对健康接口的版本为 `1.1.0`，确认 PostgreSQL、Redis 正常运行，SnowLuma 已连接。
-2. 登录后台，检查「全链路追踪」和「意识海」。追踪记录包含阶段、状态和耗时。OneBot HTTP 受理以成功回执为准，WebSocket 已提交的消息单独标识。
-3. 使用已配置的账号凭据时，可在「模型总控中心」测活 `typesafe_systemone` 门卫模型。用真实 QQ 消息验收文字及语音时，同时确认 QQ 客户端收到回复并能播放语音。
+```bash
+# 1. Core 健康与版本
+curl -s http://127.0.0.1:8000/healthz
 
-若 Core 启动失败，恢复部署源码和原 Compose 配置，将回滚镜像重新标记为 Compose 使用的 Core 镜像，再以 `--no-deps --no-build --force-recreate` 重建 Core。新增数据库列和追踪表向后兼容。数据库恢复会覆盖备份之后的写入，只有确认需要恢复数据时才使用备份。
+# 2. 登录后检查 SnowLuma 网关在线状态与仪表盘口径（需替换管理员密码）
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<YOUR_ADMIN_PASSWORD>"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+
+curl -s http://127.0.0.1:8000/api/onebot/status -H "Authorization: Bearer $TOKEN"
+curl -s http://127.0.0.1:8000/api/dashboard/overview?days=7 -H "Authorization: Bearer $TOKEN"
+```
+
+
+## 5. 启用「系统在线更新」守护进程（行业规范权限隔离架构）
+
+`companion-core` 容器不挂载 `docker.sock`，而是通过宿主机上的轻量 `systemd` 服务（`ops/updater/host_updater.py`）以 **HMAC-SHA256 签名 + 60 秒防重放** 执行拉取、重建和失败自动回滚：
+
+```bash
+# 1. 在 .env 中生成并写入共享签名密钥：
+#    UPDATE_WEBHOOK_SECRET=$(openssl rand -hex 32)
+#    UPDATE_AGENT_URL=http://host.docker.internal:9099
+#    UPDATE_GITHUB_REPO=           # 当前本地仓库留空；后期公开仓库填 owner/repo
+
+# 2. 在宿主机一键安装并启动守护进程（仅监听 Docker 网桥 / 本机，不暴露公网）
+chmod +x ops/updater/install_updater.sh
+sudo ./ops/updater/install_updater.sh /opt/companion-system
+
+# 3. 重启 Core 使新环境变量生效
+docker compose up -d --build companion-core
+```
+
+此后即可直接在手机或电脑 WebUI 的「🧩 运维、插件与更新 → 🔄 系统在线更新」中点击「检查新版本」与「一键安全更新」。若新版本健康检查失败，宿主机守护进程会自动 `git reset --hard` 回滚到上一提交并推送告警。

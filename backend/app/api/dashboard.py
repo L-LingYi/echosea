@@ -96,6 +96,16 @@ async def dashboard_overview(
         ).scalar_one()
         or 0
     )
+    tts_onebot_submitted = int(
+        (
+            await session.execute(
+                select(func.count(TTSDelivery.id)).where(
+                    TTSDelivery.created_at >= since, TTSDelivery.onebot_status.in_(("submitted", "accepted"))
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
     tts_onebot_accepted = int(
         (
             await session.execute(
@@ -106,8 +116,9 @@ async def dashboard_overview(
         ).scalar_one()
         or 0
     )
+    # Preserve original synthesis success rate metric & expose independent OneBot acceptance rate
     tts_success_rate = round((tts_synthesized / tts_total) * 100, 2) if tts_total else 100.0
-    onebot_acceptance_rate = round((tts_onebot_accepted / tts_total) * 100, 2) if tts_total else None
+    tts_accept_rate = round((tts_onebot_accepted / tts_total) * 100, 2) if tts_total else 100.0
 
     identities_count = int((await session.execute(select(func.count(QQIdentity.qq_id)))).scalar_one() or 0)
     outbox_sent = int(
@@ -145,10 +156,11 @@ async def dashboard_overview(
         "tts": {
             "total_attempts": tts_total,
             "synthesized_count": tts_synthesized,
+            "onebot_submitted_count": tts_onebot_submitted,
             "onebot_accepted_count": tts_onebot_accepted,
-            "sent_count": tts_synthesized,
+            "sent_count": tts_onebot_submitted,
             "success_rate_pct": tts_success_rate,
-            "onebot_acceptance_rate_pct": onebot_acceptance_rate,
+            "onebot_accept_rate_pct": tts_accept_rate,
         },
         "by_slot": by_slot,
         "gatekeeper": {

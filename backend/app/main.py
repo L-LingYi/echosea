@@ -1,4 +1,4 @@
-"""Companion System FastAPI entry point."""
+"""Companion System v1.0 Complete FastAPI Entrypoint (Phases 1 + 2 + 3)."""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from app.api import alerts, auth, dashboard, memory, onebot, perception, persona, providers, stickers
+from app.api import alerts, auth, dashboard, memory, onebot, perception, persona, providers, stickers, system_update
 from app.config import Settings, get_settings
 from app.core.alert_service import AlertService
 from app.core.brain_service import CompanionPipeline
@@ -28,6 +28,7 @@ from app.core.reflection_service import ReflectionService
 from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService
 from app.core.tts_service import DoubaoTTSService
+from app.core.update_service import UpdateService
 from app.core.web_perception_service import WebPerceptionService
 from app.models.db import AdminUser
 from app.plugins.sdk import AutoStickerReactionPlugin, PluginManager, RemoteBackupSyncPlugin
@@ -44,6 +45,8 @@ def create_app(
     feed_fetcher=None,
     search_caller=None,
     systemone_caller=None,
+    update_http_get=None,
+    update_http_post=None,
 ) -> FastAPI:
     settings = settings_override or get_settings()
 
@@ -57,13 +60,12 @@ def create_app(
         db_mgr = DatabaseManager()
         db_mgr.init(settings.database_url)
         await db_mgr.create_all()
-        if db_mgr.engine.dialect.name == "postgresql":
-            mig_path = Path(__file__).resolve().parents[2] / "db" / "migrations_v1_1.sql"
-            async with db_mgr.engine.connect() as conn:
-                raw_connection = await conn.get_raw_connection()
-                driver_connection = raw_connection.driver_connection
-                async with driver_connection.transaction():
-                    await driver_connection.execute(mig_path.read_text(encoding="utf-8"))
+        # Safe idempotent PostgreSQL live-upgrade guard (v1.1.0)
+        if settings.database_url.startswith("postgresql"):
+            for mig_name in ("migrations_v1_1.sql", "migrations_v1_2.sql"):
+                mig_path = Path(__file__).resolve().parents[2] / "db" / mig_name
+                if mig_path.exists():
+                    await db_mgr.run_migration_script(mig_path.read_text(encoding="utf-8"))
         app.state.db_manager = db_mgr
 
         # Seed default admin user if table is empty
@@ -105,8 +107,8 @@ def create_app(
             ws_url=settings.snowluma_ws_url,
             http_url=settings.snowluma_http_url,
             access_token=settings.snowluma_access_token,
+            http_token=settings.snowluma_http_token,
             bot_qq=settings.bot_qq,
-            http_access_token=settings.snowluma_http_access_token,
         )
         multimodal_service = MultimodalService()
         sticker_service = StickerService()
@@ -118,6 +120,17 @@ def create_app(
             search_caller=search_caller,
         )
         life_schedule = LifeScheduleService()
+        update_service = UpdateService(
+            current_version=settings.app_version,
+            current_commit=settings.app_git_commit,
+            github_repo=settings.update_github_repo,
+            git_branch=settings.update_git_branch,
+            updater_url=settings.update_agent_url,
+            updater_secret=settings.update_webhook_secret,
+            alert_service=alert_service,
+            http_get=update_http_get,
+            http_post=update_http_post,
+        )
 
         pipeline = CompanionPipeline(
             store=store,
@@ -157,6 +170,7 @@ def create_app(
         app.state.reflection_service = reflection_service
         app.state.web_perception = web_perception
         app.state.life_schedule = life_schedule
+        app.state.update_service = update_service
         app.state.pipeline = pipeline
 
         # 4. Load Built-in Modular Plugins onto Event Bus
@@ -201,6 +215,7 @@ def create_app(
     app.include_router(alerts.router)
     app.include_router(stickers.router)
     app.include_router(perception.router)
+    app.include_router(system_update.router)
     app.include_router(onebot.router)
 
     @app.get("/healthz")
