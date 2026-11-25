@@ -58,6 +58,18 @@ services:
     networks:
       - companion_net
 
+  searxng:
+    image: searxng/searxng:latest
+    container_name: companion-searxng
+    restart: unless-stopped
+    profiles: ["search"]
+    volumes:
+      - ./ops/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    networks:
+      - companion_net
+
   caddy:
     image: caddy:2-alpine
     container_name: companion-caddy

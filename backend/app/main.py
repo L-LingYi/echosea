@@ -121,6 +121,9 @@ def create_app(
             master_key=settings.master_encryption_key,
             feed_fetcher=feed_fetcher,
             search_caller=search_caller,
+            searxng_url=settings.searxng_url,
+            default_free_search_enabled=settings.default_free_search_enabled,
+            search_timeout_seconds=settings.web_search_timeout_seconds,
         )
         life_schedule = LifeScheduleService()
         backup_service = BackupService(master_key=settings.master_encryption_key, http_client_factory=backup_http_client_factory)

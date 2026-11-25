@@ -1,0 +1,27 @@
+# SearXNG configuration for EchoSea (enables JSON API for zero-API-key web search)
+use_default_settings: true
+
+server:
+  secret_key: "echosea-local-searxng-secret-change-in-prod"
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "zh-CN"
+  formats:
+    - html
+    - json
+
+engines:
+  - name: bing
+    disabled: false
+  - name: baidu
+    disabled: false
+  - name: sogou
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: wikipedia
+    disabled: false

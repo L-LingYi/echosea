@@ -74,3 +74,34 @@ curl -fsS http://127.0.0.1:8000/healthz
    - 升级前自动备份 PostgreSQL（保存在 `/var/lib/companion-updater`）并保留旧版 Core 镜像。
    - 若新版本未通过 `/healthz` 或提交校验失败，更新器将自动回退至上一提交与旧镜像。
    - `docker-compose.yml`、`Dockerfile` 及更新器自身的变更，建议由运维在宿主机人工审核后部署或重新运行 `install_updater.sh`。
+
+---
+
+## 本次升级（自主联网搜索 & 免 API SearXNG）运维操作说明
+
+本次更新仅修改应用代码与可选 `searxng` 服务编排，**无数据库破坏性变更，无需执行手动 SQL 迁移**。
+
+1. **常规在线/手动升级 Core（必做）**：
+   - 如已配置宿主机在线更新器，可直接在管理后台 **「运维、插件与更新 → 系统在线更新」** 点击检查并安装；
+   - 若手动更新：
+     ```bash
+     cd /opt/echosea
+     git pull --ff-only
+     APP_GIT_COMMIT=$(git rev-parse HEAD) docker compose build companion-core
+     APP_GIT_COMMIT=$(git rev-parse HEAD) docker compose up -d --no-deps --no-build --force-recreate --wait companion-core
+     curl -fsS http://127.0.0.1:8000/healthz
+     ```
+   - 仅升级 `companion-core` 后即可**免 API Key 开箱使用**内置免费搜索兜底，不会中断原有业务。
+
+2. **可选启用本地 SearXNG 聚合搜索容器（强烈推荐生产环境开启）**：
+   - 本仓库已新增 `ops/searxng/settings.yml` 与 `docker-compose.yml` 中的 `searxng` 服务（`profiles: ["search"]`），启动后 `companion-core` 会自动通过内网 `http://searxng:8080` 调用聚合搜索（支持 Bing / 百度 / 搜狗 / DuckDuckGo / Wikipedia，无需任何 API Key）：
+     ```bash
+     cd /opt/echosea
+     docker compose --profile search up -d searxng
+     ```
+   - 若服务器已配置 `.env`，可按需核对或补充（默认代码已内建同样默认值，不写也能运行）：
+     ```dotenv
+     SEARXNG_URL=http://searxng:8080
+     DEFAULT_FREE_SEARCH_ENABLED=true
+     ```
+   - 若管理后台「模型总控中心」的 `web_search` 槽位已配置第三方付费 API（如 Tavily / Serper），系统仍优先使用该配置；删除或禁用后自动回落至 SearXNG / 内置免费检索。

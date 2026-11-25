@@ -172,8 +172,27 @@ async def test_web_perception_dual_channel_and_full_e2e_v1():
 
     captured_prompts = []
 
-    async def fake_llm(provider, api_key, messages, temperature, max_tokens):
+    async def fake_llm(provider, api_key, messages, temperature, max_tokens, tools=None, **_kwargs):
         captured_prompts.append(messages)
+        has_tool_msg = any(m.get("role") == "tool" for m in messages)
+        if tools and not has_tool_msg and any("啥梗" in str(m.get("content", "")) for m in messages if m.get("role") == "user"):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "等我查一下哈",
+                            "tool_calls": [
+                                {
+                                    "id": "call_slang_1",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "这啥梗 热门动画"}'},
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 420, "completion_tokens": 24, "cached_tokens": 180},
+            }
         return {
             "choices": [{"message": {"content": "哈哈那个新梗我刚刷到过，太好笑了 [sticker:laugh]"}}],
             "usage": {"prompt_tokens": 500, "completion_tokens": 30, "cached_tokens": 200},

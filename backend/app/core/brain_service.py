@@ -25,11 +25,58 @@ from app.core.redis_store import StateStore
 from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService, extract_sticker_tags
 from app.core.tts_service import DoubaoTTSService, detect_voice_intent
-from app.core.web_perception_service import WebPerceptionService, needs_fast_web_search
+from app.core.web_perception_service import WebPerceptionService
 from app.models.db import ChatMessage, PersonaVersion, PipelineTrace, SystemConfig
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_FILLER_PHRASES = (
+    "等我查一下哈",
+    "我帮你翻翻看",
+    "稍等，我去搜搜看",
+    "我看看网上咋说的",
+)
+
+WEB_SEARCH_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "搜索互联网获取最新消息、热梗科普、实时数据或你不确定的事实。"
+                "日常闲聊或已有常识即可回答的问题不要调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "提炼后的简洁精准搜索关键词（不要直接整段复制聊天原话）",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_webpage",
+            "description": "抓取并阅读指定公网 HTTP/HTTPS 网页的正文内容（用于查看新闻详情或用户发来的链接）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "要阅读的公网 http:// 或 https:// 链接",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
 
 DEFAULT_BANNED_PHRASES = [
     "接住了",
@@ -422,7 +469,7 @@ class CompanionPipeline:
             await self._trace(session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status)
             return {"handled": "voice_fallback_text", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
 
-        # 7. Assemble 5-Layer Memory + Slow/Fast Internet Perception
+        # 7. Assemble 5-Layer Memory + Slow Daily Briefing
         memory_ctx = await self.memory_service.assemble_context(
             session=session,
             scene=envelope.scene,
@@ -430,11 +477,8 @@ class CompanionPipeline:
             group_id=envelope.group_id,
         )
         briefing_text = ""
-        fast_search_text = ""
         if self.web_perception is not None:
             briefing_text = await self.web_perception.get_latest_briefing_text(session)
-            if needs_fast_web_search(envelope.raw_text):
-                fast_search_text = await self.web_perception.fast_search(session, envelope.raw_text)
 
         messages = self.build_prompt_messages(
             persona,
@@ -442,11 +486,12 @@ class CompanionPipeline:
             envelope,
             decision,
             briefing_text=briefing_text,
-            fast_search_text=fast_search_text,
+            enable_search_tools=(self.web_perception is not None),
         )
 
-        # 8. Invoke Main Brain via Model Control Center
+        # 8. Invoke Main Brain via Model Control Center (with autonomous Tool Calling)
         t_brain = time.perf_counter()
+        search_tools = WEB_SEARCH_TOOLS if self.web_perception is not None else None
         try:
             completion = await self.model_hub.chat_complete(
                 session=session,
@@ -457,11 +502,16 @@ class CompanionPipeline:
                 source="production",
                 request_id=request_id,
                 session_scope=session_scope,
+                tools=search_tools,
             )
             await self._trace(
                 session, request_id, envelope.scene, envelope.group_id, "main_brain", "ok",
                 latency_ms=int((time.perf_counter() - t_brain) * 1000),
-                meta={"provider": completion.provider_name, "used_fallback": completion.used_fallback},
+                meta={
+                    "provider": completion.provider_name,
+                    "used_fallback": completion.used_fallback,
+                    "tool_calls": len(completion.tool_calls),
+                },
             )
         except Exception as exc:
             await self._trace(
@@ -474,9 +524,42 @@ class CompanionPipeline:
         if await self.store.is_recalled(envelope.message_id):
             return {"handled": "aborted_recalled_before_send", "request_id": request_id, "decision": decision.model_dump()}
 
+        # 8b. Autonomous Web Search in an isolated session (send immediate filler first so chat never stalls)
+        search_queries: list[str] = []
+        filler_text: str | None = None
+        filler_delivery: dict[str, Any] | None = None
+        if completion.tool_calls and self.web_perception is not None:
+            filler_text = self._pick_search_filler(completion.content, list(persona.banned_phrases or []), request_id)
+            if voice_intent != "answer_voice":
+                f_out = await self.adapter.send_message(
+                    session,
+                    envelope.scene,
+                    target_id or envelope.sender_qq,
+                    filler_text,
+                )
+                f_out.request_id = request_id
+                filler_delivery = {
+                    "id": f_out.id,
+                    "text": filler_text,
+                    "status": f_out.status,
+                    "onebot_status": f_out.onebot_status,
+                }
+            completion, search_queries = await self._execute_isolated_search_session(
+                session=session,
+                persona=persona,
+                memory_ctx=memory_ctx,
+                envelope=envelope,
+                decision=decision,
+                briefing_text=briefing_text,
+                base_messages=messages,
+                initial_completion=completion,
+                request_id=request_id,
+            )
+
         # Tiered SLA Policy:
         # - direct_pass (explicit wake-up / DM): NEVER dropped; only warn on Dashboard if > ideal_reply_ms.
-        # - soft_entry (unsolicited chime-in): warn on Dashboard if slow, and drop ONLY if severely stale (>=35s & >=5 newer msgs).
+        # - soft_entry (unsolicited chime-in): warn on Dashboard if slow, and drop ONLY if severely stale (>=35s & >=5 newer msgs)
+        #   and no filler message was already sent.
         total_elapsed_s = time.perf_counter() - t_start
         total_elapsed_ms = int(total_elapsed_s * 1000)
         if total_elapsed_ms > self.ideal_reply_ms:
@@ -488,7 +571,8 @@ class CompanionPipeline:
                 detail=f"请求 {request_id} ({decision.action}) 总耗时 {total_elapsed_ms}ms。",
             )
         if (
-            decision.action == "soft_entry"
+            not filler_delivery
+            and decision.action == "soft_entry"
             and envelope.scene == "group"
             and envelope.group_id is not None
             and total_elapsed_s >= self.stale_soft_entry_seconds
@@ -552,9 +636,10 @@ class CompanionPipeline:
                 group_id=envelope.group_id,
                 target_message_id=envelope.message_id,
                 elapsed_seconds=(time.perf_counter() - t_start),
+                after_filler=bool(filler_delivery),
             )
         bubbles = split_natural_bubbles(cleaned, max_bubbles=int(cfg.get("max_bubbles", 3)))
-        deliveries = []
+        deliveries = [filler_delivery] if filler_delivery else []
         for idx, bubble in enumerate(bubbles):
             reply_id = envelope.message_id if (idx == 0 and should_quote) else None
             delivery = await self.adapter.send_message(
@@ -625,10 +710,146 @@ class CompanionPipeline:
             "decision": decision.model_dump(),
             "bubbles": bubbles,
             "deliveries": deliveries,
+            "filler": filler_text,
+            "search_queries": search_queries,
             "sticker": sent_sticker,
             "provider": completion.provider_name,
             "used_fallback": completion.used_fallback,
         }
+
+    @staticmethod
+    def _pick_search_filler(raw_content: str, banned_phrases: list[str], request_id: str) -> str:
+        """Choose immediate non-blocking filler text before running web search."""
+        text_only, _ = extract_sticker_tags(raw_content or "")
+        candidate = re.sub(r"</?tts\s*>", "", text_only, flags=re.IGNORECASE).strip()
+        if candidate:
+            cleaned = sanitize_anti_ai_flavor(candidate, banned_phrases)
+            if cleaned and cleaned != "emmm":
+                return cleaned[:60]
+        idx = sum(ord(ch) for ch in request_id) % len(_SEARCH_FILLER_PHRASES)
+        return _SEARCH_FILLER_PHRASES[idx]
+
+    @staticmethod
+    def _parse_tool_args(raw_args: Any) -> dict[str, Any]:
+        if isinstance(raw_args, dict):
+            return raw_args
+        if isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {"query": raw_args.strip()}
+        return {}
+
+    async def _execute_isolated_search_session(
+        self,
+        session: AsyncSession,
+        persona: PersonaVersion,
+        memory_ctx: dict[str, Any],
+        envelope: MessageEnvelope,
+        decision: GatekeeperDecision,
+        briefing_text: str,
+        base_messages: list[dict[str, Any]],
+        initial_completion: Any,
+        request_id: str,
+    ) -> tuple[Any, list[str]]:
+        """Run tool calls + answer synthesis in a fresh isolated model session (`search:{request_id}`)."""
+        search_session_scope = f"search:{request_id}"
+        search_messages = list(base_messages)
+        current = initial_completion
+        queries: list[str] = []
+        collected_snippets: list[str] = []
+        t_search = time.perf_counter()
+
+        for round_idx in range(2):
+            if not current.tool_calls or self.web_perception is None:
+                break
+            assistant_msg = dict(current.raw_message) if current.raw_message else {}
+            assistant_msg.setdefault("role", "assistant")
+            assistant_msg.setdefault("content", current.content or None)
+            assistant_msg["tool_calls"] = current.tool_calls
+            search_messages.append(assistant_msg)
+
+            for tc_idx, tc in enumerate(current.tool_calls[:3]):
+                fn = tc.get("function") or {}
+                fn_name = str(fn.get("name") or "")
+                args = self._parse_tool_args(fn.get("arguments"))
+                tc_id = str(tc.get("id") or f"call_{round_idx}_{tc_idx}")
+
+                if fn_name == "web_search":
+                    q = str(args.get("query") or envelope.raw_text).strip()
+                    queries.append(q)
+                    res = await self.web_perception.fast_search(session, q)
+                    tool_output = res or "未找到相关公开搜索结果，请如实告知没查到确切信息，不要编造。"
+                elif fn_name == "fetch_webpage":
+                    url = str(args.get("url") or "").strip()
+                    queries.append(url)
+                    tool_output = await self.web_perception.fetch_webpage(url)
+                else:
+                    tool_output = f"未知工具: {fn_name}"
+
+                collected_snippets.append(tool_output)
+                search_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "name": fn_name,
+                        "content": tool_output,
+                    }
+                )
+
+            next_tools = WEB_SEARCH_TOOLS if round_idx == 0 else None
+            try:
+                current = await self.model_hub.chat_complete(
+                    session=session,
+                    slot="main_brain",
+                    messages=search_messages,
+                    temperature=0.75,
+                    max_tokens=600 if decision.action == "direct_pass" else 180,
+                    source="production",
+                    request_id=request_id,
+                    session_scope=search_session_scope,
+                    tools=next_tools,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Tool-role synthesis failed in isolated search session (%s); falling back to context injection: %s",
+                    search_session_scope,
+                    exc,
+                )
+                fallback_msgs = self.build_prompt_messages(
+                    persona,
+                    memory_ctx,
+                    envelope,
+                    decision,
+                    briefing_text=briefing_text,
+                    fast_search_text="\n\n".join(collected_snippets)[:4000],
+                    enable_search_tools=False,
+                )
+                current = await self.model_hub.chat_complete(
+                    session=session,
+                    slot="main_brain",
+                    messages=fallback_msgs,
+                    temperature=0.75,
+                    max_tokens=600 if decision.action == "direct_pass" else 180,
+                    source="production",
+                    request_id=request_id,
+                    session_scope=search_session_scope,
+                )
+                break
+
+        await self._trace(
+            session,
+            request_id,
+            envelope.scene,
+            envelope.group_id,
+            "web_search",
+            "ok" if queries else "skipped",
+            latency_ms=int((time.perf_counter() - t_search) * 1000),
+            meta={"queries": queries, "session_scope": search_session_scope},
+        )
+        return current, queries
 
 
     async def count_newer_group_messages(
@@ -667,11 +888,14 @@ class CompanionPipeline:
         group_id: int,
         target_message_id: str,
         elapsed_seconds: float = 0.0,
+        after_filler: bool = False,
     ) -> bool:
-        """Smart Quoting: only quote in group chat if target message was buried by >=N newer messages or reply took >=25s."""
+        """Smart Quoting: quote if buried by >=N newer messages, reply took >=25s, or newer msgs arrived after filler."""
         if elapsed_seconds >= self.smart_quote_min_delay_seconds:
             return True
         newer_count = await self.count_newer_group_messages(session, group_id, target_message_id)
+        if after_filler and newer_count >= 1:
+            return True
         return newer_count >= self.smart_quote_min_intervening
 
     @staticmethod
@@ -682,6 +906,7 @@ class CompanionPipeline:
         decision: GatekeeperDecision,
         briefing_text: str = "",
         fast_search_text: str = "",
+        enable_search_tools: bool = False,
     ) -> list[dict[str, Any]]:
         """Prompt Cache optimized layout: static system prompt + few-shot prefix FIRST, dynamic memory AFTER."""
         messages: list[dict[str, Any]] = [
@@ -708,6 +933,12 @@ class CompanionPipeline:
             dynamic_parts.append(f"[今日刷网背景常识]\n{briefing_text}")
         if fast_search_text:
             dynamic_parts.append(f"[按需联网搜索结果（请消化后用自己口吻自然转述）]\n{fast_search_text}")
+        if enable_search_tools:
+            dynamic_parts.append(
+                "[联网工具使用准则] 你拥有 web_search（联网搜索）和 fetch_webpage（读取网页正文）工具。"
+                "仅在涉及实时新闻、近期热梗、最新价格/赛程/数据、你不确定的事实或用户发来网页链接需要阅读时自主调用；"
+                "日常闲聊或常识问题直接回复，不要滥用。决定调用工具时，可以在回复文本里附带一句极简自然的过渡语（如「等我查一下哈」），不要解释工具参数。"
+            )
         if memory_ctx["l2_ambient_summaries"]:
             dynamic_parts.append("[近期群聊边缘旁听摘要]\n" + "\n".join(memory_ctx["l2_ambient_summaries"]))
         if memory_ctx["l1_group_to_dm_bridge"]:

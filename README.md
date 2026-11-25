@@ -1,6 +1,6 @@
 # EchoSea（回声海）
 
-> 版本：`v1.4.4` ｜ 面向 Linux / Docker 云端 24 小时运行的独立拟人陪伴系统，原生适配 **SnowLuma（OneBot v11）** 网关。
+> 版本：`v1.5.0` ｜ 面向 Linux / Docker 云端 24 小时运行的独立拟人陪伴系统，原生适配 **SnowLuma（OneBot v11）** 网关。
 
 EchoSea 围绕「群聊优先、兼顾私聊」的真实社交节奏设计，内置三层归属门卫、五层半隔离记忆、多模态看图与表情包图库、豆包 TTS 语音合成、作息状态机与全链路运维控制台。
 
@@ -31,7 +31,7 @@ EchoSea 围绕「群聊优先、兼顾私聊」的真实社交节奏设计，内
 - **豆包 TTS 语音管线**：支持「用语音回答 / 引用后说用语音 / 别发语音」指令识别，口播前清洗 Markdown 与括号动作，支持情绪语速映射、时长保护与超时自动降级文字。
 
 ### 5. 联网感知、作息日程与插件生态
-- **双通道联网感知**：慢通道抓取 RSS / JSON 信源提炼「今日刷网简报」融入常识；快通道在聊到新梗或热搜时按需联网搜索并自然转述。
+- **大模型自主联网感知（免 API 开箱即用）**：慢通道抓取 RSS / JSON 信源提炼「今日刷网简报」融入常识；快通道由主脑大模型通过标准 Function Calling（`web_search` / `fetch_webpage`）自主判断是否需要搜索并提炼关键词，先发轻量过渡语不卡聊，再在独立 `search:<request_id>` 会话中完成检索与自然转述；搜索执行层支持 **后台 `web_search` 槽位 → 本地 SearXNG 容器（`--profile search`）→ 内置免 API 免费检索兜底** 三级路由。
 - **24 小时作息与插件 SDK**：作息日程驱动 L5 状态；提供 `CompanionPlugin` 标准 SDK 与异步事件总线（独立超时与异常隔离），内置自动偷图与异地备份同步告警插件。
 
 ### 6. 云端运维控制台（WebUI）
@@ -66,8 +66,8 @@ cp .env.example .env
 # 基础启动（Core + PostgreSQL + Redis）
 docker compose up -d --build
 
-# 完整启动（含 Caddy 自动 HTTPS 与每日数据库备份）
-docker compose --profile https --profile backup up -d --build
+# 完整启动（含 Caddy 自动 HTTPS、每日数据库备份与免 API SearXNG 聚合搜索）
+docker compose --profile https --profile backup --profile search up -d --build
 ```
 
 > 默认仅监听 `127.0.0.1:8000`；如需绑定域名并启用自动 HTTPS，请配置 `Caddyfile` 与 `COMPANION_DOMAIN` 后使用 `--profile https` 启动。

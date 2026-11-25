@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "EchoSea（回声海）"
-    app_version: str = "1.4.4"
+    app_version: str = "1.5.0"
     environment: str = "production"
     log_level: str = "INFO"
 
@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     ambient_summary_trigger_count: int = 20
     dm_bridge_window_minutes: int = 30
     plugin_timeout_seconds: float = 5.0
+    searxng_url: str = "http://searxng:8080"
+    default_free_search_enabled: bool = True
+    web_search_timeout_seconds: float = 8.0
 
     # Industry-Standard Online Update (Privilege-Separated Host Updater Daemon)
     app_git_commit: str = ""

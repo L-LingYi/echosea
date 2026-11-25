@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
@@ -42,6 +43,8 @@ class ChatCompletionResult:
     ttft_ms: int = 0
     total_ms: int = 0
     used_fallback: bool = False
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    raw_message: dict[str, Any] = field(default_factory=dict)
 
 
 class ModelHubService:
@@ -324,6 +327,34 @@ class ModelHubService:
         spend = await self.get_today_spend_usd(session)
         return spend >= self.daily_budget_usd
 
+    @staticmethod
+    async def _invoke_http_caller(
+        caller: Callable[..., Awaitable[dict[str, Any]]],
+        provider: ModelProvider,
+        api_key: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        session_scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Call injected test/custom http_caller while preserving 5-arg backwards compatibility."""
+        try:
+            sig = inspect.signature(caller)
+            params = sig.parameters
+            accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+            extra: dict[str, Any] = {}
+            if accepts_kwargs or "tools" in params:
+                extra["tools"] = tools
+            if accepts_kwargs or "tool_choice" in params:
+                extra["tool_choice"] = tool_choice
+            if accepts_kwargs or "session_scope" in params:
+                extra["session_scope"] = session_scope
+            return await caller(provider, api_key, messages, temperature, max_tokens, **extra)
+        except (ValueError, TypeError):
+            return await caller(provider, api_key, messages, temperature, max_tokens)
+
     async def chat_complete(
         self,
         session: AsyncSession,
@@ -334,6 +365,9 @@ class ModelHubService:
         source: str = "production",
         request_id: str | None = None,
         session_scope: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        disable_thinking: bool = False,
     ) -> ChatCompletionResult:
         """Invoke primary provider for slot; seamlessly failover & skip cooling primaries until recovery."""
         stmt = (
@@ -352,11 +386,48 @@ class ModelHubService:
             t0 = time.perf_counter()
             try:
                 if self._http_caller is not None:
-                    raw = await self._http_caller(provider, api_key, messages, temperature, max_tokens)
-                else:
-                    raw = await self._call_openai_compatible(
-                        provider, api_key, messages, temperature, max_tokens, session_scope=session_scope
+                    raw = await self._invoke_http_caller(
+                        self._http_caller,
+                        provider,
+                        api_key,
+                        messages,
+                        temperature,
+                        max_tokens,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        session_scope=session_scope,
                     )
+                else:
+                    try:
+                        raw = await self._call_openai_compatible(
+                            provider,
+                            api_key,
+                            messages,
+                            temperature,
+                            max_tokens,
+                            session_scope=session_scope,
+                            tools=tools,
+                            tool_choice=tool_choice,
+                            disable_thinking=disable_thinking,
+                        )
+                    except httpx.HTTPStatusError as exc:
+                        if tools and exc.response is not None and exc.response.status_code in (400, 422):
+                            logger.warning(
+                                "Provider '%s' rejected tools payload (HTTP %s); retrying without tools",
+                                provider.name,
+                                exc.response.status_code,
+                            )
+                            raw = await self._call_openai_compatible(
+                                provider,
+                                api_key,
+                                messages,
+                                temperature,
+                                max_tokens,
+                                session_scope=session_scope,
+                                disable_thinking=disable_thinking,
+                            )
+                        else:
+                            raise
 
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 usage = raw.get("usage", {})
@@ -371,9 +442,15 @@ class ModelHubService:
                 )
 
                 content = ""
+                tool_calls: list[dict[str, Any]] = []
+                raw_message: dict[str, Any] = {}
                 choices = raw.get("choices", [])
                 if choices:
-                    content = choices[0].get("message", {}).get("content", "") or ""
+                    msg = choices[0].get("message", {}) or {}
+                    raw_message = dict(msg)
+                    content = msg.get("content") or ""
+                    if isinstance(msg.get("tool_calls"), list):
+                        tool_calls = [tc for tc in msg["tool_calls"] if isinstance(tc, dict)]
 
                 # Auto-clear cooldown & refresh health on live success
                 was_cooling = self.clear_cooldown(provider.id)
@@ -415,6 +492,8 @@ class ModelHubService:
                     ttft_ms=elapsed_ms,
                     total_ms=elapsed_ms,
                     used_fallback=(idx > 0 or provider.role == "fallback"),
+                    tool_calls=tool_calls,
+                    raw_message=raw_message,
                 )
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -714,6 +793,8 @@ class ModelHubService:
         gatekeeper_json: bool = False,
         timeout_override: float | None = None,
         disable_thinking: bool = False,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = f"{provider.base_url.rstrip('/')}/chat/completions"
         extra = provider.extra_config or {}
@@ -728,6 +809,9 @@ class ModelHubService:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice or "auto"
         if isinstance(extra.get("extra_body"), dict):
             payload.update(extra["extra_body"])
         if disable_thinking and "thinking" not in payload and "reasoning_effort" not in payload:

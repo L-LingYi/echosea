@@ -1,5 +1,12 @@
 # 更新日志（Changelog）
 
+## v1.5.0 (2026-11-25)
+- **大模型自主联网搜索与独立会话异步转述**：
+  - `ModelHubService` 新增 OpenAI 兼容 `tools` / `tool_choice` 与 `tool_calls` 解析支持（兼容 OpenCode Go `deepseek-v4.1-flash` 与 `x-opencode-session` 会话隔离，不支持 `tools` 的接口自动降级重试）。
+  - 主脑改由大模型自主判断是否调用 `web_search` / `fetch_webpage` 工具；触发搜索时先即时发送简短过渡语避免聊天卡顿，再在独立 `search:<request_id>` 会话中完成检索、正文读取与自然转述（期间若群聊刷屏自动引用原提问）。
+  - `WebPerceptionService` 升级为三级免 API 兜底路由：后台 `web_search` 槽位 → 可选 Docker `searxng` 容器（`--profile search`）→ 内置纯 `httpx` 免费检索兜底，并增加公网网页抓取 SSRF 防护。
+  - 链路追踪与运维文档同步更新（`web_search` 追踪标签、`ops/searxng/settings.yml` 与 `docs/OPS_UPDATE_GUIDE.md`）。
+
 ## v1.4.4 (2026-11-25)
 - **公开仓库与通用人设准备**：将 `persona.json` 替换为通用人设 `echosea_v1`（默认角色名 `回声`），统一 WebUI 侧边栏标题与意识海核心节点标识为 `EchoSea`。
 - **默认公开更新源与界面精简**：将 `UPDATE_GITHUB_REPO` 默认值设为 `L-LingYi/echosea`，精简「系统在线更新」卡片标题与模式状态显示，移除「本地仓库模式」等内部阶段文案。
