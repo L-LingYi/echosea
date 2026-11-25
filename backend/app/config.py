@@ -1,10 +1,27 @@
 """Application settings loaded from environment variables."""
 from __future__ import annotations
 
+import os
 import secrets
+from datetime import datetime, timedelta, timezone, tzinfo
 from functools import lru_cache
+from zoneinfo import ZoneInfo
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def resolve_timezone(tz_name: str | None = None) -> tzinfo:
+    """Resolve an IANA timezone name (default Asia/Shanghai), falling back to UTC+8."""
+    name = (tz_name or os.environ.get("TZ") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return timezone(timedelta(hours=8))
+
+
+def local_now(tz_name: str | None = None) -> datetime:
+    """Return current timezone-aware datetime in the configured application timezone."""
+    return datetime.now(resolve_timezone(tz_name))
 
 
 class Settings(BaseSettings):
@@ -12,7 +29,8 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "EchoSea（回声海）"
-    app_version: str = "1.5.3"
+    app_version: str = "1.5.4"
+    app_timezone: str = Field(default="Asia/Shanghai", validation_alias=AliasChoices("app_timezone", "tz"))
     environment: str = "production"
     log_level: str = "INFO"
 

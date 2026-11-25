@@ -1,12 +1,13 @@
 """Character Circadian Life Schedule & State Machine (L5 Self Life Memory)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import local_now
 from app.models.db import LifeScheduleSlot, SelfLifeState
 
 DEFAULT_SCHEDULE = [
@@ -22,6 +23,9 @@ DEFAULT_SCHEDULE = [
 
 class LifeScheduleService:
     """Drives the character's circadian rhythm, energy, mood, and daily activity."""
+
+    def __init__(self, timezone_name: str = "Asia/Shanghai") -> None:
+        self.timezone_name = timezone_name
 
     async def ensure_default_slots(self, session: AsyncSession) -> list[LifeScheduleSlot]:
         rows = list((await session.execute(select(LifeScheduleSlot).order_by(LifeScheduleSlot.start_hour.asc()))).scalars().all())
@@ -42,7 +46,7 @@ class LifeScheduleService:
     ) -> SelfLifeState:
         """Advance the state machine for the given hour (0-23) and record a fresh L5 SelfLifeState."""
         slots = await self.ensure_default_slots(session)
-        hour = local_hour if local_hour is not None else datetime.now(timezone.utc).hour
+        hour = local_hour if local_hour is not None else local_now(self.timezone_name).hour
 
         matched = None
         for s in slots:

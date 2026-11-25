@@ -20,6 +20,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import local_now
 from app.models.db import (
     BackupRecord,
     GroupExpression,
@@ -47,10 +48,12 @@ class BackupService:
         master_key: str,
         local_backup_dir: str = "./backups",
         http_client_factory: Callable[[], Any] | None = None,
+        timezone_name: str = "Asia/Shanghai",
     ) -> None:
         self.master_key = master_key
         self.local_backup_dir = Path(local_backup_dir)
         self._http_client_factory = http_client_factory
+        self.timezone_name = timezone_name
 
     def _make_client(self, timeout: float = 30.0) -> httpx.AsyncClient:
         if self._http_client_factory is not None:
@@ -290,7 +293,7 @@ class BackupService:
 
         snapshot = {
             "project": "EchoSea",
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": local_now(self.timezone_name).isoformat(),
             "counts": {
                 "identities": len(identities),
                 "episodes": len(episodes),
@@ -352,7 +355,7 @@ class BackupService:
                 for h in hot_sources
             ],
         }
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        ts = local_now(self.timezone_name).strftime("%Y%m%d_%H%M%S")
         filename = f"echosea_backup_{ts}.json.gz"
         payload = gzip.compress(json.dumps(snapshot, ensure_ascii=False).encode("utf-8"))
         return filename, payload

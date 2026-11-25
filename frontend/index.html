@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>EchoSea（回声海）v1.5.3 · 云端意识总控台</title>
+<title>EchoSea（回声海）v1.5.4 · 云端意识总控台</title>
 <style>
   :root {
     color-scheme: light;
@@ -369,7 +369,7 @@
         <path d="M6.5 7.2a8 8 0 0 1 11 0" opacity=".7" />
       </svg>
     </div>
-    <h1>EchoSea · 回声海 v1.5.3</h1>
+    <h1>EchoSea · 回声海 v1.5.4</h1>
     <p>SnowLuma 网关 · 记忆意识海 · 云端陪伴总控台</p>
     <form id="loginForm">
       <label>管理员账号</label><input id="loginUser" value="admin" autocomplete="username" required />
@@ -398,7 +398,7 @@
           <path d="M6.5 7.2a8 8 0 0 1 11 0" opacity=".7" />
         </svg>
       </div>
-      <div>EchoSea · 回声海<small>v1.5.3 · SnowLuma &amp; Jev</small></div>
+      <div>EchoSea · 回声海<small>v1.5.4 · SnowLuma &amp; Jev</small></div>
     </div>
     <div class="nav-group">核心观测</div>
     <button class="nav-btn active" data-tab="dashboard">📊 运行仪表盘</button>
@@ -884,6 +884,16 @@ function formatCompactNum(n) {
 function esc(val) {
   return String(val ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
 }
+function formatLocalTime(iso, includeYear = false) {
+  if (!iso) return '-';
+  const raw = String(iso).trim();
+  const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const d = new Date(hasTz ? raw : `${raw}Z`);
+  if (Number.isNaN(d.getTime())) return raw.slice(includeYear ? 0 : 5, 19).replace('T', ' ');
+  const pad = n => String(n).padStart(2, '0');
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return includeYear ? `${d.getFullYear()}-${md}` : md;
+}
 function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 2600); }
 function toggleDrawer(force) {
   const sb = document.getElementById('sidebar'), bd = document.getElementById('drawerBackdrop');
@@ -1209,7 +1219,7 @@ async function loadTraces() {
     <td><code>${esc(r.request_id)}</code></td><td>${esc(r.scene)}${r.group_id ? ' / '+esc(r.group_id) : ''}</td>
     <td><span class="badge info">${esc(labelOf(STAGE_LABELS, r.stage))}</span></td>
     <td><span class="badge ${['ok','accepted','submitted','synthesized','direct_pass','soft_entry'].includes(r.status)?'ok':(r.status==='silent'?'warn':'err')}">${esc(labelOf(STATUS_LABELS, r.status))}</span></td>
-    <td>${Number(r.latency_ms)}ms</td><td>${esc(r.error_type || '-')}</td><td>${esc((r.created_at||'').slice(5,19).replace('T',' '))}</td>
+    <td>${Number(r.latency_ms)}ms</td><td>${esc(r.error_type || '-')}</td><td>${esc(formatLocalTime(r.created_at))}</td>
   </tr>`).join('') : '<tr><td colspan="7" class="empty-state">暂无追踪记录</td></tr>';
 }
 
@@ -1438,7 +1448,7 @@ async function loadOps() {
   document.getElementById('bkAutoEnabled').checked = Boolean(bkCfg.auto_enabled);
   document.getElementById('bkInterval').value = String(bkCfg.schedule_interval_hours || 24);
   document.getElementById('bkRetention').value = String(bkCfg.retention_count || 14);
-  document.getElementById('bkLastAuto').textContent = bkCfg.auto_enabled ? (bkCfg.last_auto_backup_at ? `定时备份已开启 · 上次执行：${bkCfg.last_auto_backup_at.slice(0,19).replace('T',' ')} UTC` : '定时备份已开启 · 等待首次自动执行') : '定时自动备份未开启';
+  document.getElementById('bkLastAuto').textContent = bkCfg.auto_enabled ? (bkCfg.last_auto_backup_at ? `定时备份已开启 · 上次执行：${formatLocalTime(bkCfg.last_auto_backup_at, true)}` : '定时备份已开启 · 等待首次自动执行') : '定时自动备份未开启';
   document.getElementById('bkAuthBadge').innerHTML = bkCfg.aliyun_authorized ? `<span class="badge ok">已授权 (${esc(bkCfg.aliyun_refresh_token_masked)})</span>` : '<span class="badge warn">未授权：请填入 Refresh Token 或改用 WebDAV 模式</span>';
   toggleBackupFields();
   document.getElementById('pluginList').innerHTML = pl.loaded_plugins.map(p=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);"><strong>${esc(p.name)}</strong> <span class="badge info">v${esc(p.version)}</span> <span style="font-size:12px;color:var(--mute);">超时 ${Number(p.timeout_seconds)}s</span><div style="font-size:12.5px;color:var(--ink2);margin-top:3px;">${esc(p.description)}</div></div>`).join('');
@@ -1446,7 +1456,7 @@ async function loadOps() {
   const modeLabel = upd.mode === 'github_public' ? `GitHub (${esc(upd.github_repo)})` : '未配置 GitHub 仓库';
   document.getElementById('updateStatusBox').innerHTML = `<div class="pill-list"><span class="badge info">当前版本 v${esc(upd.current_version)}</span><span class="badge purple">${modeLabel}</span><span class="badge ${upd.updater_configured?'ok':'warn'}">${upd.updater_configured?'宿主机更新代理就绪':'未配置宿主机更新代理'}</span></div>`;
   const fmtUpdMode = m => m === 'github_public' ? 'GitHub' : (m === 'local_repo' ? '受控更新源' : m);
-  document.getElementById('updateJobTable').innerHTML = (upd.jobs || []).length ? upd.jobs.map(j=>`<tr><td><code>${esc(j.job_uid)}</code></td><td>${esc(fmtUpdMode(j.mode))} / ${esc(j.target_ref)}</td><td><code>${esc(j.from_commit||j.from_version)}</code> → <code>${esc(j.to_commit||'-')}</code></td><td><span class="badge ${j.status==='succeeded'?'ok':(j.status==='running'||j.status==='pending'?'info':'err')}">${esc(labelOf(STATUS_LABELS, j.status))}</span></td><td>${esc(j.log_summary)}</td><td>${esc((j.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">暂无在线更新记录</td></tr>';
+  document.getElementById('updateJobTable').innerHTML = (upd.jobs || []).length ? upd.jobs.map(j=>`<tr><td><code>${esc(j.job_uid)}</code></td><td>${esc(fmtUpdMode(j.mode))} / ${esc(j.target_ref)}</td><td><code>${esc(j.from_commit||j.from_version)}</code> → <code>${esc(j.to_commit||'-')}</code></td><td><span class="badge ${j.status==='succeeded'?'ok':(j.status==='running'||j.status==='pending'?'info':'err')}">${esc(labelOf(STATUS_LABELS, j.status))}</span></td><td>${esc(j.log_summary)}</td><td>${esc(formatLocalTime(j.created_at))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">暂无在线更新记录</td></tr>';
 }
 async function checkSystemUpdate() {
   const message = document.getElementById('updateCheckMessage');
@@ -1541,7 +1551,7 @@ async function enableTotp() {
 
 async function loadAlerts() {
   const [chs, evs] = await Promise.all([api('/api/alerts/channels'), api('/api/alerts/events')]);
-  document.getElementById('alertList').innerHTML = `<div class="pill-list" style="margin-bottom:14px;">${chs.map(c=>`<span class="badge info">${esc(labelOf(ALERT_TYPE_LABELS, c.channel_type))} · ${esc(c.name)}</span>`).join('')||'<span style="color:var(--mute)">尚未配置告警通道</span>'}</div><div class="table-wrap"><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${esc(labelOf(SEVERITY_LABELS, e.severity))}</span></td><td>${esc(e.category)}</td><td>${esc(e.title)}</td><td>${esc((e.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-state">暂无告警记录</td></tr>'}</tbody></table></div>`;
+  document.getElementById('alertList').innerHTML = `<div class="pill-list" style="margin-bottom:14px;">${chs.map(c=>`<span class="badge info">${esc(labelOf(ALERT_TYPE_LABELS, c.channel_type))} · ${esc(c.name)}</span>`).join('')||'<span style="color:var(--mute)">尚未配置告警通道</span>'}</div><div class="table-wrap"><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${esc(labelOf(SEVERITY_LABELS, e.severity))}</span></td><td>${esc(e.category)}</td><td>${esc(e.title)}</td><td>${esc(formatLocalTime(e.created_at))}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-state">暂无告警记录</td></tr>'}</tbody></table></div>`;
 }
 document.getElementById('alertForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/alerts/channels', { method: 'POST', body: JSON.stringify({ channel_type: document.getElementById('aType').value, name: document.getElementById('aName').value.trim(), config: JSON.parse(document.getElementById('aConfig').value) }) }); toast('告警通道已加密保存'); loadAlerts(); });
 async function sendTestAlert() { await api('/api/alerts/test', { method: 'POST' }); toast('测试告警已发送'); loadAlerts(); }

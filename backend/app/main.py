@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -37,6 +39,27 @@ from app.security import LoginRateLimiter, hash_password
 
 logger = logging.getLogger(__name__)
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _configure_runtime_time_and_logging(settings: Settings, apply_process_tz: bool = True) -> None:
+    """Align process timezone (for stdlib logging/time) and ensure timestamps on app/uvicorn logs."""
+    if apply_process_tz and settings.app_timezone:
+        os.environ["TZ"] = settings.app_timezone
+        if hasattr(time, "tzset"):
+            time.tzset()
+
+    level = getattr(logging, str(settings.log_level or "INFO").upper(), logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=level, format=_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT)
+    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT)
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv_logger = logging.getLogger(logger_name)
+        for handler in uv_logger.handlers:
+            handler.setFormatter(formatter)
+
 
 def create_app(
     settings_override: Settings | None = None,
@@ -52,6 +75,7 @@ def create_app(
     preset_fetcher=None,
 ) -> FastAPI:
     settings = settings_override or get_settings()
+    _configure_runtime_time_and_logging(settings, apply_process_tz=(settings_override is None))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -119,7 +143,7 @@ def create_app(
         multimodal_service = MultimodalService()
         sticker_service = StickerService()
         tts_service = DoubaoTTSService(master_key=settings.master_encryption_key, synthesizer=tts_synthesizer)
-        reflection_service = ReflectionService(model_hub=model_hub)
+        reflection_service = ReflectionService(model_hub=model_hub, timezone_name=settings.app_timezone)
         web_perception = WebPerceptionService(
             master_key=settings.master_encryption_key,
             feed_fetcher=feed_fetcher,
@@ -128,9 +152,14 @@ def create_app(
             default_free_search_enabled=settings.default_free_search_enabled,
             search_timeout_seconds=settings.web_search_timeout_seconds,
             webpage_fetch_enabled=settings.webpage_fetch_enabled,
+            timezone_name=settings.app_timezone,
         )
-        life_schedule = LifeScheduleService()
-        backup_service = BackupService(master_key=settings.master_encryption_key, http_client_factory=backup_http_client_factory)
+        life_schedule = LifeScheduleService(timezone_name=settings.app_timezone)
+        backup_service = BackupService(
+            master_key=settings.master_encryption_key,
+            http_client_factory=backup_http_client_factory,
+            timezone_name=settings.app_timezone,
+        )
         update_service = UpdateService(
             current_version=settings.app_version,
             current_commit=settings.app_git_commit,

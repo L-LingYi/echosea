@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import local_now
 from app.core.model_hub import ModelHubService
 from app.models.db import ChatMessage, GroupExpression, MemoryEpisode, QQIdentity
 
@@ -35,8 +36,9 @@ ANNIVERSARY_CUES = ("周年", "纪念日", "生日", "第一次", "认识一")
 class ReflectionService:
     """Runs offline reflection using the 'reflection' model slot (or deterministic fallback extractor)."""
 
-    def __init__(self, model_hub: ModelHubService) -> None:
+    def __init__(self, model_hub: ModelHubService, timezone_name: str = "Asia/Shanghai") -> None:
         self.model_hub = model_hub
+        self.timezone_name = timezone_name
 
     async def run_nightly_reflection(
         self,
@@ -125,6 +127,7 @@ class ReflectionService:
                 ex.usage_count += count
 
         # 4. Extract episodic milestones & interaction anniversaries
+        today_local = local_now(self.timezone_name).date()
         for m in msgs:
             if any(cue in m.raw_text for cue in ANNIVERSARY_CUES):
                 scope = "public_group" if m.scene == "group" else "private_dm"
@@ -137,7 +140,7 @@ class ReflectionService:
                         content=f"{m.sender_display_name}: {m.raw_text[:200]}",
                         importance=0.85,
                         is_anniversary=True,
-                        event_date=date.today(),
+                        event_date=today_local,
                     )
                 )
                 episodes_created += 1
@@ -155,7 +158,7 @@ class ReflectionService:
                     content=content,
                     importance=float(ep.get("importance", 0.7)),
                     is_anniversary=bool(ep.get("is_anniversary", False)),
-                    event_date=date.today(),
+                    event_date=today_local,
                 )
             )
             episodes_created += 1

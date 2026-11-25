@@ -313,3 +313,55 @@ async def test_dashboard_today_metrics_align_with_local_midnight(monkeypatch):
         assert dash_utc["tts"]["today_chars"] == len("昨天晚上的语音") + len("今天凌晨")
         assert dash_utc["cost"]["today_spend_usd"] == pytest.approx(0.65)
 
+
+@pytest.mark.asyncio
+async def test_local_timezone_for_schedule_backup_and_webui_logs(db_session, monkeypatch, tmp_path):
+    from datetime import datetime
+    from pathlib import Path
+
+    from app.config import resolve_timezone
+    from app.core import backup_service as backup_mod
+    from app.core import life_schedule_service as sched_mod
+    from app.core import web_perception_service as web_mod
+    from app.models.db import HotTopicSource
+
+    # 2026-11-25 17:05:00 UTC == 2026-11-26 01:05:00 Asia/Shanghai
+    fixed_shanghai = datetime(2026, 11, 26, 1, 5, 0, tzinfo=resolve_timezone("Asia/Shanghai"))
+    monkeypatch.setattr(sched_mod, "local_now", lambda tz=None: fixed_shanghai)
+    monkeypatch.setattr(web_mod, "local_now", lambda tz=None: fixed_shanghai)
+    monkeypatch.setattr(backup_mod, "local_now", lambda tz=None: fixed_shanghai)
+
+    # 1. LifeScheduleService defaults to local hour (01:05 -> sleeping), not UTC hour (17:05)
+    sched = sched_mod.LifeScheduleService(timezone_name="Asia/Shanghai")
+    state = await sched.sync_current_state(db_session)
+    assert state.current_activity == "睡觉补觉中"
+    assert state.diary_entry.startswith("01:00 ")
+
+    # 2. WebPerceptionService DailyBriefing uses local date (2026-11-26), not UTC date (2026-11-25)
+    db_session.add(HotTopicSource(name="TestFeed", category="tech", feed_url="https://example.com/rss", is_enabled=True))
+    await db_session.flush()
+
+    async def fake_feed(_url: str) -> str:
+        return "<rss><channel><item><title>Local Date Item</title></item></channel></rss>"
+
+    wp = web_mod.WebPerceptionService(master_key="k", feed_fetcher=fake_feed, timezone_name="Asia/Shanghai")
+    briefing = await wp.refresh_daily_briefing(db_session)
+    assert briefing is not None
+    assert briefing.briefing_date.isoformat() == "2026-11-26"
+
+    # 3. BackupService snapshot filename & exported_at use local timezone
+    bk = backup_mod.BackupService(master_key="k", local_backup_dir=str(tmp_path), timezone_name="Asia/Shanghai")
+    filename, _ = await bk._build_snapshot_bytes(db_session)
+    assert filename == "echosea_backup_20261126_010500.json.gz"
+
+    # 4. WebUI renders trace/update/alert/backup timestamps via formatLocalTime (no raw UTC slicing)
+    html = Path("frontend/index.html").read_text(encoding="utf-8")
+    assert "function formatLocalTime(" in html
+    assert "formatLocalTime(r.created_at)" in html
+    assert "formatLocalTime(j.created_at)" in html
+    assert "formatLocalTime(e.created_at)" in html
+    assert "formatLocalTime(bkCfg.last_auto_backup_at, true)" in html
+    assert ".slice(5,19).replace('T',' ')" not in html
+    assert "last_auto_backup_at.slice(0,19)" not in html
+
+

@@ -44,6 +44,8 @@ services:
       - .env
     environment:
       APP_GIT_COMMIT: ${APP_GIT_COMMIT:-}
+      TZ: ${TZ:-Asia/Shanghai}
+      APP_TIMEZONE: ${APP_TIMEZONE:-${TZ:-Asia/Shanghai}}
     volumes:
       - sticker_data:/app/data
     depends_on:
@@ -67,6 +69,7 @@ services:
       - ./ops/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
+      - TZ=${TZ:-Asia/Shanghai}
     networks:
       - companion_net
 
@@ -94,6 +97,7 @@ services:
     profiles: ["backup"]
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD:-companion_secret}
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./backups:/backups
     entrypoint: >

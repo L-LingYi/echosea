@@ -85,7 +85,7 @@ def test_v1_4_0_echosea_branding_sticker_presets_hot_sources_and_aliyun_backup()
     with TestClient(app) as client:
         # 1. EchoSea (回声海) branding & v1.4.0
         h = client.get("/healthz").json()
-        assert h["version"] == "1.5.3"
+        assert h["version"] == "1.5.4"
         html = client.get("/").text
         assert "EchoSea" in html and "回声海" in html
         assert "推荐公开表情包图库" in html

@@ -22,6 +22,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import local_now
 from app.models.db import DailyBriefing, HotTopicSource, ModelProvider
 from app.security import decrypt_secret
 
@@ -250,6 +251,7 @@ class WebPerceptionService:
         default_free_search_enabled: bool = True,
         search_timeout_seconds: float = 8.0,
         webpage_fetch_enabled: bool = True,
+        timezone_name: str = "Asia/Shanghai",
     ) -> None:
         self.master_key = master_key
         self._feed_fetcher = feed_fetcher
@@ -258,6 +260,7 @@ class WebPerceptionService:
         self.default_free_search_enabled = default_free_search_enabled
         self.search_timeout_seconds = search_timeout_seconds
         self.webpage_fetch_enabled = webpage_fetch_enabled
+        self.timezone_name = timezone_name
 
     async def refresh_daily_briefing(self, session: AsyncSession) -> DailyBriefing | None:
         """Slow channel: fetch enabled RSS/Atom/JSON sources and distill today's background briefing."""
@@ -283,7 +286,7 @@ class WebPerceptionService:
         digest_text = "今日刷网简报（仅供聊天背景常识，绝不主动群发播报）：\n" + "\n".join(digest_lines)
 
         briefing = DailyBriefing(
-            briefing_date=date.today(),
+            briefing_date=local_now(self.timezone_name).date(),
             category="daily",
             digest_text=digest_text,
             source_items=collected[:12],
