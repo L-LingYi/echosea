@@ -61,7 +61,7 @@ class Settings(BaseSettings):
 
     # Industry-Standard Online Update (Privilege-Separated Host Updater Daemon)
     app_git_commit: str = ""
-    update_github_repo: str = ""          # e.g. 'username/companion-system' once public; empty = local_repo mode
+    update_github_repo: str = "L-LingYi/echosea"
     update_git_branch: str = "main"
     update_agent_url: str = ""            # e.g. 'http://host.docker.internal:9099'
     update_webhook_secret: str = ""       # Shared HMAC-SHA256 secret with host_updater.py

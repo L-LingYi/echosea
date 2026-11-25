@@ -304,7 +304,7 @@ async def dashboard_overview(
 
     today_spend = await runtime.model_hub.get_today_spend_usd(session)
     budget_limit = runtime.model_hub.daily_budget_usd
-    usage_series = await _build_usage_series(session, now_utc, days, tz_offset_minutes)
+    usage_series = await _build_usage_series(session, now_utc, max(days, 30), tz_offset_minutes)
 
     return {
         "window_days": days,

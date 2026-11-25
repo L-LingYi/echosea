@@ -333,7 +333,8 @@
   }
   .usage-bar-col.zero .usage-bar-fill { opacity: .28; }
   .usage-bar-lbl {
-    font-size: 11px; color: var(--mute); white-space: nowrap; line-height: 1;
+    font-size: 11px; color: var(--mute); white-space: nowrap; line-height: 12px;
+    min-height: 12px; height: 12px;
   }
 
   .empty-state { text-align: center; padding: 34px 16px; color: var(--mute); font-size: 13px; }
@@ -434,7 +435,7 @@
         <div class="usage-chart-head">
           <h3>📊 总消耗柱状统计</h3>
           <div class="seg-bar">
-            <button class="seg-btn active" data-ugran="daily" onclick="switchUsageGranularity('daily')">按天（近 7 天）</button>
+            <button class="seg-btn active" data-ugran="daily" onclick="switchUsageGranularity('daily')">按天（近 30 天）</button>
             <button class="seg-btn" data-ugran="hourly" onclick="switchUsageGranularity('hourly')">按小时（最近 24 小时）</button>
           </div>
         </div>
@@ -970,8 +971,13 @@ function renderUsageChart() {
   box.innerHTML = items.map((item, idx) => {
     const val = Number(item.tokens || 0);
     const pct = val > 0 ? Math.max(4, Math.round((val / maxTok) * 100)) : 0;
-    const shortLbl = isHourly ? ((idx % 3 === 0 || idx === items.length - 1) ? item.label.slice(0, 2) : '') : item.label;
-    const topVal = val > 0 && (!isHourly || val === maxTok || idx % 3 === 0) ? formatCompactNum(val) : '';
+    const shortLbl = isHourly
+      ? ((idx % 3 === 0 || idx === items.length - 1) ? item.label.slice(0, 2) : '')
+      : (items.length > 14 ? ((idx % 5 === 0 || idx === items.length - 1) ? item.label : '') : item.label);
+    const showVal = isHourly
+      ? (val === maxTok || idx % 3 === 0)
+      : (items.length <= 10 || val === maxTok || idx % 5 === 0 || idx === items.length - 1);
+    const topVal = val > 0 && showVal ? formatCompactNum(val) : '';
     return `<div class="usage-bar-col${val === 0 ? ' zero' : ''}" onmouseenter="selectUsageBar(${idx})" onclick="selectUsageBar(${idx})" title="${esc(item.hour || item.date)}：${val.toLocaleString()} Token">
       <div class="usage-bar-val">${esc(topVal)}</div>
       <div class="usage-bar-track"><div class="usage-bar-fill" style="height:${val > 0 ? pct : 3}%"></div></div>
