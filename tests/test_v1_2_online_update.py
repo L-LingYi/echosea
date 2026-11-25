@@ -34,6 +34,8 @@ def test_online_update_github_check_trigger_callback_and_rollback_alert():
     posted_requests = []
 
     async def fake_github_get(url: str, headers: dict[str, str]):
+        if url.startswith("http://host.docker.internal:9099/result/"):
+            return {"status": "running"}
         assert "api.github.com/repos/demo/companion/releases/latest" in url
         return {
             "tag_name": "v1.3.0",

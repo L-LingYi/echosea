@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import secrets
 from functools import lru_cache
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,7 +32,9 @@ class Settings(BaseSettings):
     snowluma_ws_url: str = "ws://snowluma:3001/"
     snowluma_http_url: str = "http://snowluma:3000"
     snowluma_access_token: str = ""
-    snowluma_http_token: str = ""  # Optional independent HTTP API token
+    snowluma_http_access_token: str = Field(
+        default="", validation_alias=AliasChoices("snowluma_http_access_token", "snowluma_http_token")
+    )
     bot_qq: int = 0
     admin_qq: int = 0
 

@@ -7,11 +7,15 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.core.database import split_sql_statements_safe
+from app.core.database import DatabaseManager
 from app.core.identity_service import IdentityService
 from app.core.memory_service import MemoryService
 from app.core.snowluma_adapter import SnowLumaAdapter
@@ -19,7 +23,8 @@ from app.main import create_app
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
 
 
-def test_sql_migration_never_skips_commented_statements():
+@pytest.mark.asyncio
+async def test_sql_migration_never_skips_commented_statements():
     script = """
     -- 1. Leading comment before ALTER TABLE
     ALTER TABLE memory_episodes ADD COLUMN IF NOT EXISTS embedding_json JSONB;
@@ -28,10 +33,21 @@ def test_sql_migration_never_skips_commented_statements():
     -- Multi-line comment
     CREATE TABLE IF NOT EXISTS pipeline_traces (id INT);
     """
-    stmts = split_sql_statements_safe(script)
-    assert len(stmts) == 2
-    assert stmts[0].startswith("ALTER TABLE memory_episodes")
-    assert stmts[1].startswith("CREATE TABLE IF NOT EXISTS pipeline_traces")
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    execute = AsyncMock()
+    driver = SimpleNamespace(transaction=transaction, execute=execute)
+
+    @asynccontextmanager
+    async def connect():
+        yield SimpleNamespace(get_raw_connection=AsyncMock(return_value=SimpleNamespace(driver_connection=driver)))
+
+    manager = DatabaseManager()
+    manager.engine = SimpleNamespace(connect=connect)
+    await manager.run_migration_script(script)
+    execute.assert_awaited_once_with(script)
 
 
 @pytest.mark.asyncio

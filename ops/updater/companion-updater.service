@@ -1,18 +1,22 @@
 [Unit]
-Description=Companion System Host Updater Daemon (HMAC-Signed, Auto-Rollback)
+Description=Companion System host updater
 After=network-online.target docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/companion-system
-EnvironmentFile=/opt/companion-system/.env
-Environment=COMPANION_REPO_DIR=/opt/companion-system
-Environment=UPDATER_BIND_HOST=172.17.0.1
-Environment=UPDATER_BIND_PORT=9099
-Environment=COMPANION_CORE_URL=http://127.0.0.1:8000
-ExecStart=/usr/bin/python3 /opt/companion-system/ops/updater/host_updater.py
-Restart=always
+WorkingDirectory=/var/lib/companion-updater
+EnvironmentFile=/etc/companion-updater.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/companion-updater/host_updater.py
+StateDirectory=companion-updater
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/companion-system
+Restart=on-failure
 RestartSec=5
 
 [Install]

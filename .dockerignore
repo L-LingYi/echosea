@@ -8,3 +8,5 @@
 *.log
 /backups
 /data
+/logs
+docker-compose.override.yml

@@ -21,8 +21,9 @@ async def update_status(
     session: AsyncSession = Depends(get_db),
     runtime=Depends(get_runtime),
 ):
-    rows = list((await session.execute(select(UpdateJob).order_by(UpdateJob.created_at.desc()).limit(20))).scalars().all())
     svc = runtime.update_service
+    await svc.reconcile_active_job(session)
+    rows = list((await session.execute(select(UpdateJob).order_by(UpdateJob.created_at.desc()).limit(20))).scalars().all())
     return {
         "mode": svc.mode,
         "current_version": svc.current_version,
@@ -92,12 +93,19 @@ async def updater_callback(
     runtime=Depends(get_runtime),
 ):
     """HMAC-SHA256 authenticated callback from host updater daemon reporting success or auto-rollback."""
-    raw_body = await request.body()
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 8192:
+            raise HTTPException(status_code=413, detail="Updater callback is too large")
+        body.extend(chunk)
+    raw_body = bytes(body)
     secret = runtime.settings.update_webhook_secret
     if not verify_updater_signature(secret, x_updater_timestamp, x_updater_signature, raw_body):
         raise HTTPException(status_code=403, detail="Invalid or expired HMAC updater signature")
-    payload = json.loads(raw_body.decode("utf-8"))
     try:
+        payload = json.loads(raw_body)
+        if not isinstance(payload, dict):
+            raise ValueError("Invalid update payload")
         job = await runtime.update_service.handle_callback(session, payload)
         return {"ok": True, "job_uid": job.job_uid, "status": job.status, "rolled_back": job.rolled_back}
     except ValueError as exc:

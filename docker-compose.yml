@@ -42,6 +42,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      APP_GIT_COMMIT: ${APP_GIT_COMMIT:-}
     volumes:
       - sticker_data:/app/data
     depends_on:

@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -369,6 +370,15 @@ class UpdateJob(Base):
     """Audit trail for online self-updates (local repo or GitHub public repo) with rollback tracking."""
 
     __tablename__ = "update_jobs"
+    __table_args__ = (
+        Index(
+            "uq_update_jobs_active",
+            text("(1)"),
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running')"),
+            sqlite_where=text("status IN ('pending', 'running')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_uid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)

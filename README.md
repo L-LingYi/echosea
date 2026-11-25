@@ -2,6 +2,8 @@
 
 面向 Linux / Docker 云端 24 小时长期运行、群聊优先兼顾私聊的独立拟人陪伴系统，原生适配 **SnowLuma（OneBot v11）** 网关，完整覆盖规格书全部 10 大子系统与三期路线图。
 
+v1.2.0 在线更新使用宿主机守护进程和受控 Git 更新源。现有部署的启用步骤见 [运维更新指南](docs/OPS_UPDATE_GUIDE.md)。
+
 ## 完整功能矩阵（一期 + 二期 + 三期）
 
 1. **SnowLuma OneBot v11 接入与 QQ 强绑定**：支持反向 WS（`/ws/onebot/v11`）、正向 WS 客户端自愈与 HTTP 回调；QQ 号唯一主键同步群名片与 `known_names`；引用自动展开、撤回即时拦截、Outbox 审计、单群/全局防风控限流。

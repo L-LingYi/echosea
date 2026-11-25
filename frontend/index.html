@@ -349,13 +349,14 @@
       </div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
-          <h3 style="margin:0;">🔄 系统在线更新（支持本地仓库 / GitHub 公开仓库 · 失败自动回滚）</h3>
+          <h3 style="margin:0;">系统在线更新</h3>
           <div class="row-actions">
             <button class="btn sm secondary" onclick="checkSystemUpdate()">检查新版本</button>
-            <button class="btn sm" onclick="triggerSystemUpdate()">一键安全更新</button>
+            <button class="btn sm" id="updateTrigger" onclick="triggerSystemUpdate()" disabled>安装更新</button>
           </div>
         </div>
         <div id="updateStatusBox" style="margin-bottom:12px;">加载中...</div>
+        <p id="updateCheckMessage" aria-live="polite"></p>
         <div class="table-wrap"><table><thead><tr><th>任务 ID</th><th>模式 / 目标</th><th>版本变更</th><th>状态</th><th>摘要</th><th>时间</th></tr></thead><tbody id="updateJobTable"></tbody></table></div>
       </div>
       <div class="grid-2">
@@ -749,22 +750,36 @@ async function loadOps() {
   document.getElementById('updateJobTable').innerHTML = (upd.jobs || []).length ? upd.jobs.map(j=>`<tr><td><code>${esc(j.job_uid)}</code></td><td>${esc(j.mode)} / ${esc(j.target_ref)}</td><td><code>${esc(j.from_commit||j.from_version)}</code> → <code>${esc(j.to_commit||'-')}</code></td><td><span class="badge ${j.status==='succeeded'?'ok':(j.status==='running'||j.status==='pending'?'info':'err')}">${esc(j.status)}</span></td><td>${esc(j.log_summary)}</td><td>${esc((j.created_at||'').slice(5,19).replace('T',' '))}</td></tr>`).join('') : '<tr><td colspan="6">暂无在线更新记录</td></tr>';
 }
 async function checkSystemUpdate() {
-  toast('正在检查更新...');
-  const r = await api('/api/system/update/check');
-  LAST_CHECKED_REF = r.target_ref || r.git_branch || 'main';
-  if (r.error) { toast(r.error); return; }
-  if (r.update_available) {
-    toast(`发现新版本 ${r.latest_version}`);
-    document.getElementById('updateStatusBox').innerHTML += `<div style="margin-top:8px;padding:10px;background:#eff6ff;border-radius:8px;font-size:12.5px;"><strong>发现新版本：${esc(r.latest_version)}</strong><div>${esc(r.release_notes || '')}</div></div>`;
-  } else {
-    toast(r.message || `当前已是最新版本 (${r.current_version})`);
+  const message = document.getElementById('updateCheckMessage');
+  const trigger = document.getElementById('updateTrigger');
+  LAST_CHECKED_REF = '';
+  trigger.disabled = true;
+  message.textContent = '正在检查更新…';
+  try {
+    const result = await api('/api/system/update/check');
+    if (result.update_available && result.updater_configured && !result.error) {
+      LAST_CHECKED_REF = result.target_ref || '';
+      trigger.disabled = !LAST_CHECKED_REF;
+    }
+    message.textContent = result.error || (result.update_available
+      ? `发现新版本 ${result.latest_version} ${result.release_notes || ''}`
+      : (result.message || '当前已是最新版本。'));
+  } catch (err) {
+    message.textContent = err.message;
   }
 }
 async function triggerSystemUpdate() {
-  if (!confirm('确认触发安全在线更新？更新期间 companion-core 会有数秒短暂中断，若健康检查失败将自动回滚至上一版本。')) return;
-  const r = await api('/api/system/update/trigger', { method: 'POST', body: JSON.stringify({ target_ref: LAST_CHECKED_REF || null }) });
-  toast(`已派发更新任务 ${r.job_uid} (${r.status})`);
-  loadOps();
+  const target = LAST_CHECKED_REF;
+  if (!target || !confirm('确认安装更新？Core 会短暂重启。')) return;
+  LAST_CHECKED_REF = '';
+  document.getElementById('updateTrigger').disabled = true;
+  try {
+    const result = await api('/api/system/update/trigger', { method: 'POST', body: JSON.stringify({ target_ref: target }) });
+    toast(`更新任务 ${result.job_uid} (${result.status})`);
+    await loadOps();
+  } catch (err) {
+    toast(err.message);
+  }
 }
 async function runReflection() { const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' }); toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}`); }
 async function triggerBackup() { await api('/api/ops/backups/trigger', { method: 'POST', body: '{}' }); toast('已触发备份钩子'); loadOps(); }

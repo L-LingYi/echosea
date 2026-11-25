@@ -1,4 +1,4 @@
-"""Companion System v1.0 Complete FastAPI Entrypoint (Phases 1 + 2 + 3)."""
+"""Companion System FastAPI entry point."""
 from __future__ import annotations
 
 import asyncio
@@ -60,12 +60,10 @@ def create_app(
         db_mgr = DatabaseManager()
         db_mgr.init(settings.database_url)
         await db_mgr.create_all()
-        # Safe idempotent PostgreSQL live-upgrade guard (v1.1.0)
-        if settings.database_url.startswith("postgresql"):
+        if db_mgr.engine.dialect.name == "postgresql":
             for mig_name in ("migrations_v1_1.sql", "migrations_v1_2.sql"):
                 mig_path = Path(__file__).resolve().parents[2] / "db" / mig_name
-                if mig_path.exists():
-                    await db_mgr.run_migration_script(mig_path.read_text(encoding="utf-8"))
+                await db_mgr.run_migration_script(mig_path.read_text(encoding="utf-8"))
         app.state.db_manager = db_mgr
 
         # Seed default admin user if table is empty
@@ -107,7 +105,7 @@ def create_app(
             ws_url=settings.snowluma_ws_url,
             http_url=settings.snowluma_http_url,
             access_token=settings.snowluma_access_token,
-            http_token=settings.snowluma_http_token,
+            http_access_token=settings.snowluma_http_access_token,
             bot_qq=settings.bot_qq,
         )
         multimodal_service = MultimodalService()
@@ -220,7 +218,10 @@ def create_app(
 
     @app.get("/healthz")
     async def healthz():
-        return {"status": "ok", "version": settings.app_version, "gateway": "SnowLuma"}
+        result = {"status": "ok", "version": settings.app_version, "gateway": "SnowLuma"}
+        if settings.app_git_commit:
+            result["commit"] = settings.app_git_commit
+        return result
 
     frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
     if frontend_dir.exists():

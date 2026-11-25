@@ -1,70 +1,58 @@
-# 运维 Git 提交与线上升级指南（v1.1.1）
+# Companion System v1.2.0 运维更新指南
 
-本压缩包为 **Git 提交就绪版**，默认仅绑定 `127.0.0.1:${APP_PORT:-8000}:8000` 并通过 `.gitignore` 保护现网 `.env` 与 `docker-compose.override.yml`，避免覆盖现网 Nginx / SnowLuma 外部网络配置。
+## 首次启用在线更新
 
-> **停机提示**：现网为单 `companion-core` 实例，重建容器期间会有数秒短暂中断（并非零停机），建议避开群聊高峰窗口执行。
-
-## 1. 同步到 Git 仓库（保留现网配置）
-
-```bash
-unzip -o companion-system-v1.1.1-git-release.zip -d /tmp/release_v1_1_1
-rsync -av \
-  --exclude='.env' --exclude='.env.*' \
-  --exclude='docker-compose.override.yml' \
-  --exclude='backups/' --exclude='data/' --exclude='logs/' \
-  /tmp/release_v1_1_1/companion-system/ ./
-
-git status
-git add -A
-git commit -m "fix(v1.1.1): unify Memory Sea UI, harden XSS/quote scope, 3-state TTS fallback, safe SQL migrations & PATCH providers"
-git push origin main
-```
-
-## 2. 现网 SnowLuma 外部网络接入（一次性配置，不再被发版覆盖）
-
-如现网通过外部 Docker 网络与 SnowLuma 互通，复制 `docker-compose.override.yml.example` 为 `docker-compose.override.yml`（已被 `.gitignore` 忽略），填入实际网络名；如 HTTP API 使用独立令牌，在 `.env` 中配置 `SNOWLUMA_HTTP_TOKEN`。
-
-## 3. 数据库幂等升级与重建容器
-
-Core 启动时会在 PostgreSQL 事务中安全执行整份 `db/migrations_v1_1.sql`（已修复注释行跳过问题），也可提前手动校验：
+1. 备份现网源码、`.env`、PostgreSQL 和运行镜像。保留现网 Compose 项目名及数据卷。现网是单 Core 实例，切换容器会短暂中断请求。
+2. 将审核过的提交部署到 Linux 主机的 Git 工作区。香港云的部署目录是 `/opt/companion-system-v1`。保留 `.env`，从 `docker-compose.override.yml.example` 创建本机覆盖文件。香港云应设置 `SNOWLUMA_DOCKER_NETWORK=astrbot-napcat_astrbot_network`，原有 `SNOWLUMA_HTTP_ACCESS_TOKEN` 继续生效。
+3. 本地仓库模式使用宿主机上由 root 管理的 Git 裸仓库作为更新源。例如将本地 `main` 导出为 Git bundle，传到主机并用 `git clone --bare` 初始化 `/var/lib/companion-updater/source.git`。后续在本地生成新 bundle，由运维把其中的 `main` 快进到裸仓库。确认快进后再打开后台检查更新。
 
 ```bash
-docker exec -i companion-postgres psql -U companion -d companion < db/migrations_v1_1.sql
-docker compose up -d --build companion-core
+# 本地仓库运行
+git bundle create companion-release.bundle main
+
+# 已将 bundle 传到主机的受保护目录后，由 root 运行
+install -d -m 0700 /var/lib/companion-updater
+git clone --bare /path/to/companion-release.bundle /var/lib/companion-updater/source.git
 ```
 
-## 4. 切换后可靠验收命令（不依赖 INFO 日志）
+4. 生成一次 32 字节随机密钥（`openssl rand -hex 32`）。在 Core 的 `.env` 和宿主机 `/etc/companion-updater.env` 中配置相同的 `UPDATE_WEBHOOK_SECRET`。两个文件都限制访问权限，宿主机文件必须归 root 所有且为 `0600`。
+
+```dotenv
+# Core .env
+UPDATE_AGENT_URL=http://host.docker.internal:9099
+UPDATE_WEBHOOK_SECRET=<随机密钥>
+UPDATE_GIT_BRANCH=main
+UPDATE_GITHUB_REPO=
+```
+
+```dotenv
+# 宿主机 /etc/companion-updater.env
+COMPANION_REPO_DIR=/opt/companion-system-v1
+UPDATER_GIT_SOURCE=/var/lib/companion-updater/source.git
+UPDATER_GIT_BRANCH=main
+UPDATER_BIND_HOST=172.17.0.1
+UPDATER_BIND_PORT=9099
+COMPANION_CORE_URL=http://127.0.0.1:8000
+UPDATE_WEBHOOK_SECRET=<同一随机密钥>
+```
+
+将 `UPDATER_BIND_HOST` 设为实际的 Docker 主机网桥地址，可用 `ip -4 -o addr show dev docker0` 核对。宿主服务安装到独立系统目录。业务容器只访问签名接口。
 
 ```bash
-# 1. Core 健康与版本
-curl -s http://127.0.0.1:8000/healthz
-
-# 2. 登录后检查 SnowLuma 网关在线状态与仪表盘口径（需替换管理员密码）
-TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<YOUR_ADMIN_PASSWORD>"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
-
-curl -s http://127.0.0.1:8000/api/onebot/status -H "Authorization: Bearer $TOKEN"
-curl -s http://127.0.0.1:8000/api/dashboard/overview?days=7 -H "Authorization: Bearer $TOKEN"
+cd /opt/companion-system-v1
+sudo ./ops/updater/install_updater.sh "$PWD"
+APP_GIT_COMMIT=$(git rev-parse HEAD) docker compose config --quiet
+APP_GIT_COMMIT=$(git rev-parse HEAD) docker compose build companion-core
+APP_GIT_COMMIT=$(git rev-parse HEAD) docker compose up -d --no-deps --no-build --force-recreate --wait companion-core
+curl -fsS http://127.0.0.1:8000/healthz
 ```
 
+## WebUI 更新和回滚
 
-## 5. 启用「系统在线更新」守护进程（行业规范权限隔离架构）
+登录后台后打开「运维、插件与更新 → 系统在线更新」，点击「检查新版本」。更新源有更新时可安装。任务结果保存在后台历史中，重启期间可在服务恢复后重新打开页面查询。
 
-`companion-core` 容器不挂载 `docker.sock`，而是通过宿主机上的轻量 `systemd` 服务（`ops/updater/host_updater.py`）以 **HMAC-SHA256 签名 + 60 秒防重放** 执行拉取、重建和失败自动回滚：
+宿主更新器只从其配置指定的 Git 来源快进，并校验正在运行的 Core 提交。Compose、Dockerfile 等部署定义变更由运维在宿主机审核并部署。更新器自身的变更审核后重新运行安装脚本生效。
 
-```bash
-# 1. 在 .env 中生成并写入共享签名密钥：
-#    UPDATE_WEBHOOK_SECRET=$(openssl rand -hex 32)
-#    UPDATE_AGENT_URL=http://host.docker.internal:9099
-#    UPDATE_GITHUB_REPO=           # 当前本地仓库留空；后期公开仓库填 owner/repo
+实际升级前会备份 PostgreSQL，保留之前的 Core 镜像。新提交未通过 `/healthz` 时恢复上一提交和镜像。迁移应保持向后兼容。数据库备份保存在 `/var/lib/companion-updater`，恢复备份应先确认需要覆盖备份之后的写入。
 
-# 2. 在宿主机一键安装并启动守护进程（仅监听 Docker 网桥 / 本机，不暴露公网）
-chmod +x ops/updater/install_updater.sh
-sudo ./ops/updater/install_updater.sh /opt/companion-system
-
-# 3. 重启 Core 使新环境变量生效
-docker compose up -d --build companion-core
-```
-
-此后即可直接在手机或电脑 WebUI 的「🧩 运维、插件与更新 → 🔄 系统在线更新」中点击「检查新版本」与「一键安全更新」。若新版本健康检查失败，宿主机守护进程会自动 `git reset --hard` 回滚到上一提交并推送告警。
+后续迁移到公开 GitHub 仓库时，在宿主机配置中把 `UPDATER_GIT_SOURCE` 设为审核同意的 `https://github.com/owner/repo.git`，并重启守护进程。Core 的 `UPDATE_GITHUB_REPO` 设为同一个 `owner/repo`，与宿主机使用相同分支。宿主机只接受该分支上的更新提交或该分支历史上的对应发布标签。

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -16,10 +17,14 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.alert_service import AlertService
 from app.models.db import UpdateJob
+
+ACTIVE_STATUSES = ("pending", "running")
+FINAL_STATUSES = ("succeeded", "rolled_back", "failed")
 
 
 def sign_updater_payload(secret: str, timestamp: str, body_bytes: bytes) -> str:
@@ -35,14 +40,12 @@ def verify_updater_signature(
     body_bytes: bytes,
     max_skew_seconds: int = 60,
 ) -> bool:
-    """Verify HMAC-SHA256 signature with strict timestamp anti-replay protection."""
+    """Verify the signature and its 60-second freshness window."""
     if not secret or not timestamp or not signature:
         return False
-    try:
-        ts = int(timestamp)
-    except ValueError:
+    if not re.fullmatch(r"[0-9]{1,12}", timestamp) or not re.fullmatch(r"[0-9a-f]{64}", signature):
         return False
-    if abs(int(time.time()) - ts) > max_skew_seconds:
+    if abs(int(time.time()) - int(timestamp)) > max_skew_seconds:
         return False
     expected = sign_updater_payload(secret, timestamp, body_bytes)
     return hmac.compare_digest(expected, signature.strip())
@@ -103,7 +106,17 @@ class UpdateService:
             "release_url": "",
         }
         if not self.github_repo:
-            base["message"] = "当前处于本地仓库模式：可直接点击「触发更新」拉取本地/运维推送的最新提交；后期公开仓库后在 .env 配置 UPDATE_GITHUB_REPO 即可自动检测 GitHub 新版本。"
+            if not base["updater_configured"]:
+                base["message"] = "宿主机更新服务尚未配置。"
+                return base
+            try:
+                status = await self._get_host("/check")
+                base.update(status)
+                target = str(status.get("target_ref") or "")
+                base["latest_version"] = target[:12] or self.current_version
+                base["message"] = "本地更新源已同步。" if not status["update_available"] else "本地更新源有新提交。"
+            except (httpx.HTTPError, ValueError, KeyError):
+                base["error"] = "暂时无法检查本地更新源。"
             return base
 
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "CompanionSystem-Updater/1.2"}
@@ -129,12 +142,12 @@ class UpdateService:
         try:
             cdata = await self._get_json(commit_url, headers)
             sha = str(cdata.get("sha") or "")[:12]
-            msg = str((cdata.get("commit") or {}).get("message") or "").splitlines()[0]
+            msg, _, _ = str((cdata.get("commit") or {}).get("message") or "").partition("\n")
             base["latest_version"] = sha or self.current_version
             base["update_available"] = bool(sha and self.current_commit and not sha.startswith(self.current_commit[:7]))
             base["release_notes"] = msg
             base["release_url"] = str(cdata.get("html_url") or "")
-            base["target_ref"] = self.git_branch
+            base["target_ref"] = str(cdata.get("sha") or "")
             return base
         except Exception as exc:
             base["error"] = f"无法连接 GitHub 检查更新：{exc}"
@@ -150,12 +163,13 @@ class UpdateService:
         if not self.updater_url or not self.updater_secret:
             raise ValueError("未配置宿主机更新服务（请在 .env 设置 UPDATE_AGENT_URL 与 UPDATE_WEBHOOK_SECRET）")
 
-        # Prevent concurrent in-flight update jobs
-        active_stmt = select(UpdateJob).where(UpdateJob.status.in_(("pending", "running"))).limit(1)
-        if (await session.execute(active_stmt)).scalar_one_or_none() is not None:
+        active = await self.reconcile_active_job(session)
+        if active is not None and active.status in ACTIVE_STATUSES:
             raise ValueError("已有正在执行中的更新任务，请等待其完成后再试")
 
-        ref = (target_ref or self.git_branch).strip()
+        ref = self.git_branch if target_ref is None else target_ref
+        if not isinstance(ref, str) or (ref != self.git_branch and not re.fullmatch(r"(?:[0-9a-f]{40}|v[0-9]+\.[0-9]+\.[0-9]+)", ref)):
+            raise ValueError("请先检查可用的更新版本")
         job = UpdateJob(
             job_uid=f"upd_{uuid.uuid4().hex[:12]}",
             triggered_by=triggered_by,
@@ -163,47 +177,63 @@ class UpdateService:
             target_ref=ref,
             from_version=self.current_version,
             from_commit=self.current_commit,
-            status="pending",
-            log_summary="已签发更新指令，等待宿主机更新守护进程接管...",
+            status="running",
+            log_summary="等待宿主机执行更新。",
         )
         session.add(job)
-        await session.flush()
-
-        payload = {
-            "job_uid": job.job_uid,
-            "target_ref": ref,
-            "github_repo": self.github_repo,
-            "branch": self.git_branch,
-        }
-        body_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        ts = str(int(time.time()))
-        sig = sign_updater_payload(self.updater_secret, ts, body_bytes)
-        headers = {
-            "Content-Type": "application/json",
-            "X-Updater-Timestamp": ts,
-            "X-Updater-Signature": sig,
-        }
-
         try:
-            resp = await self._post_raw(f"{self.updater_url}/trigger", headers, body_bytes)
-            job.status = "running"
-            job.log_summary = str(resp.get("message") or "宿主机更新进程已受理，正在拉取代码并重建容器...")
-        except Exception as exc:
-            job.status = "failed"
-            job.log_summary = f"调用宿主机更新守护进程失败：{exc}"
-            job.finished_at = datetime.now(timezone.utc)
-        await session.flush()
+            # A fast no-op or failed update can call back before the trigger response returns.
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise ValueError("已有正在执行中的更新任务，请等待其完成后再试") from exc
+
+        payload = {"job_uid": job.job_uid, "target_ref": ref}
+        body_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        try:
+            await self._post_raw(f"{self.updater_url}/trigger", self._host_headers(body_bytes), body_bytes)
+        except httpx.HTTPStatusError as exc:
+            if 400 <= exc.response.status_code < 500:
+                await self.handle_callback(session, {"job_uid": job.job_uid, "status": "failed",
+                                                     "log_summary": "宿主机拒绝了更新请求。"})
+        except (httpx.RequestError, ValueError):
+            # The host may have received the request. Reconcile using its durable job record.
+            pass
+        await session.refresh(job)
         return job
+
+    async def reconcile_active_job(self, session: AsyncSession) -> UpdateJob | None:
+        stmt = select(UpdateJob).where(UpdateJob.status.in_(ACTIVE_STATUSES)).limit(1)
+        active = (await session.execute(stmt)).scalar_one_or_none()
+        if active is None or not self.updater_url or not self.updater_secret:
+            return active
+        try:
+            result = await self._get_host(f"/result/{active.job_uid}")
+        except httpx.HTTPStatusError as exc:
+            created = active.created_at.replace(tzinfo=timezone.utc)
+            if exc.response.status_code == 404 and (datetime.now(timezone.utc) - created).total_seconds() > 60:
+                return await self.handle_callback(session, {"job_uid": active.job_uid, "status": "failed",
+                                                            "log_summary": "宿主机没有受理该任务。"})
+        except (httpx.RequestError, ValueError):
+            pass
+        else:
+            if result.get("job_uid") == active.job_uid and result.get("status") in FINAL_STATUSES:
+                return await self.handle_callback(session, result)
+        return active
 
     async def handle_callback(self, session: AsyncSession, payload: dict[str, Any]) -> UpdateJob:
         """Record completion or auto-rollback result reported back by the host updater daemon."""
         job_uid = str(payload.get("job_uid") or "")
-        stmt = select(UpdateJob).where(UpdateJob.job_uid == job_uid)
+        stmt = select(UpdateJob).where(UpdateJob.job_uid == job_uid).with_for_update().execution_options(populate_existing=True)
         job = (await session.execute(stmt)).scalar_one_or_none()
         if job is None:
             raise ValueError(f"UpdateJob not found: {job_uid}")
 
-        status = str(payload.get("status") or "failed")
+        if job.status in FINAL_STATUSES:
+            return job
+        status = payload.get("status")
+        if status not in FINAL_STATUSES:
+            raise ValueError("无效的任务结果")
         job.status = status
         job.rolled_back = bool(payload.get("rolled_back") or status == "rolled_back")
         if payload.get("from_commit"):
@@ -225,6 +255,26 @@ class UpdateService:
             )
         return job
 
+    def _host_headers(self, body: bytes) -> dict[str, str]:
+        stamp = str(int(time.time()))
+        return {
+            "Content-Type": "application/json",
+            "X-Updater-Timestamp": stamp,
+            "X-Updater-Signature": sign_updater_payload(self.updater_secret, stamp, body),
+        }
+
+    async def _get_host(self, path: str) -> dict[str, Any]:
+        headers = self._host_headers(path.encode())
+        if self._http_get is not None:
+            return await self._http_get(f"{self.updater_url}{path}", headers)
+        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
+            response = await client.get(f"{self.updater_url}{path}", headers=headers)
+        if not verify_updater_signature(self.updater_secret, response.headers.get("X-Updater-Timestamp"),
+                                        response.headers.get("X-Updater-Signature"), response.content):
+            raise ValueError("Invalid host response signature")
+        response.raise_for_status()
+        return response.json()
+
     async def _get_json(self, url: str, headers: dict[str, str]) -> dict[str, Any]:
         if self._http_get is not None:
             return await self._http_get(url, headers)
@@ -236,7 +286,10 @@ class UpdateService:
     async def _post_raw(self, url: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
         if self._http_post is not None:
             return await self._http_post(url, headers, body)
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             resp = await client.post(url, headers=headers, content=body)
+            if not verify_updater_signature(self.updater_secret, resp.headers.get("X-Updater-Timestamp"),
+                                            resp.headers.get("X-Updater-Signature"), resp.content):
+                raise ValueError("Invalid host response signature")
             resp.raise_for_status()
             return resp.json()

@@ -14,8 +14,5 @@ logs/
 *.db
 *.db-wal
 *.db-shm
-*.sqlite
-*.sqlite3
-*.sqlite3-wal
-*.sqlite3-shm
+*.sqlite*
 .DS_Store

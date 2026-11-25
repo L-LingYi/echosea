@@ -18,3 +18,4 @@ CREATE TABLE IF NOT EXISTS update_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_update_jobs_created ON update_jobs (created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_update_jobs_active ON update_jobs ((1)) WHERE status IN ('pending', 'running');
