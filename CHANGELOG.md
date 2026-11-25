@@ -1,5 +1,11 @@
 # 更新日志（Changelog）
 
+## v1.5.2 (2026-11-25)
+- **网页读取（`fetch_webpage`）逐跳重定向 SSRF 防护与独立开关**：
+  - 将 `WebPerceptionService.fetch_webpage` 由 `follow_redirects=True` 改为禁用自动跳转并逐跳手动解析 `Location`（最多 5 跳），**每次跳转前均重新调用 `_is_public_http_url` 校验目标地址**，拦截跳转至 `127.0.0.1`、内网网段、云元数据地址或 `file://` 等非公网协议的 SSRF 绕过行为。
+  - 新增独立配置项 `WEBPAGE_FETCH_ENABLED`（默认 `true`），可在保留 `SearXNG` / `web_search` 联网搜索的前提下随时单独关闭网页读取工具。
+  - 在 `tests/test_autonomous_web_search.py` 补充不安全重定向拦截、安全重定向放行、最大跳转限制及独立开关回归测试。
+
 ## v1.5.1 (2026-11-25)
 - **群聊话题连续性优化（防断聊）**：
   - **单人注意力窗口渐进护栏**：保留 `max_consecutive_group_turns=4` 作为软收紧起点，在用户个人注意力窗口内从第 `4` 轮起每轮渐进抬高有效阈值（`+0.08/轮`，封顶 `0.90`）并继续交由门卫模型语义评估，放宽注意力窗口硬上限至 `max_attention_group_turns=8`，避免正常追问在第 4 轮后被一刀切静音。

@@ -499,11 +499,12 @@ class CompanionPipeline:
             decision,
             briefing_text=briefing_text,
             enable_search_tools=(self.web_perception is not None),
+            enable_webpage_fetch=bool(self.web_perception and self.web_perception.webpage_fetch_enabled),
         )
 
         # 8. Invoke Main Brain via Model Control Center (with autonomous Tool Calling)
         t_brain = time.perf_counter()
-        search_tools = WEB_SEARCH_TOOLS if self.web_perception is not None else None
+        search_tools = self._active_search_tools()
         try:
             completion = await self.model_hub.chat_complete(
                 session=session,
@@ -734,6 +735,13 @@ class CompanionPipeline:
             "used_fallback": completion.used_fallback,
         }
 
+    def _active_search_tools(self) -> list[dict[str, Any]] | None:
+        if self.web_perception is None:
+            return None
+        if self.web_perception.webpage_fetch_enabled:
+            return WEB_SEARCH_TOOLS
+        return [t for t in WEB_SEARCH_TOOLS if t.get("function", {}).get("name") != "fetch_webpage"]
+
     @staticmethod
     def _pick_search_filler(raw_content: str, banned_phrases: list[str], request_id: str) -> str:
         """Choose immediate non-blocking filler text before running web search."""
@@ -816,7 +824,7 @@ class CompanionPipeline:
                     }
                 )
 
-            next_tools = WEB_SEARCH_TOOLS if round_idx == 0 else None
+            next_tools = self._active_search_tools() if round_idx == 0 else None
             try:
                 current = await self.model_hub.chat_complete(
                     session=session,
@@ -954,6 +962,7 @@ class CompanionPipeline:
         briefing_text: str = "",
         fast_search_text: str = "",
         enable_search_tools: bool = False,
+        enable_webpage_fetch: bool = True,
     ) -> list[dict[str, Any]]:
         """Prompt Cache optimized layout: static system prompt + few-shot prefix FIRST, dynamic memory AFTER."""
         messages: list[dict[str, Any]] = [
@@ -981,9 +990,15 @@ class CompanionPipeline:
         if fast_search_text:
             dynamic_parts.append(f"[按需联网搜索结果（请消化后用自己口吻自然转述）]\n{fast_search_text}")
         if enable_search_tools:
+            if enable_webpage_fetch:
+                tool_intro = "你拥有 web_search（联网搜索）和 fetch_webpage（读取网页正文）工具。"
+                tool_scope = "实时新闻、近期热梗、最新价格/赛程/数据、你不确定的事实或用户发来网页链接需要阅读时自主调用"
+            else:
+                tool_intro = "你拥有 web_search（联网搜索）工具。"
+                tool_scope = "实时新闻、近期热梗、最新价格/赛程/数据或你不确定的事实时自主调用"
             dynamic_parts.append(
-                "[联网工具使用准则] 你拥有 web_search（联网搜索）和 fetch_webpage（读取网页正文）工具。"
-                "仅在涉及实时新闻、近期热梗、最新价格/赛程/数据、你不确定的事实或用户发来网页链接需要阅读时自主调用；"
+                f"[联网工具使用准则] {tool_intro}"
+                f"仅在涉及{tool_scope}；"
                 "日常闲聊或常识问题直接回复，不要滥用。决定调用工具时，可以在回复文本里附带一句极简自然的过渡语（如「等我查一下哈」），不要解释工具参数。"
             )
         if memory_ctx["l2_ambient_summaries"]:

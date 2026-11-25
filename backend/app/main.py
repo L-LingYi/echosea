@@ -127,6 +127,7 @@ def create_app(
             searxng_url=settings.searxng_url,
             default_free_search_enabled=settings.default_free_search_enabled,
             search_timeout_seconds=settings.web_search_timeout_seconds,
+            webpage_fetch_enabled=settings.webpage_fetch_enabled,
         )
         life_schedule = LifeScheduleService()
         backup_service = BackupService(master_key=settings.master_encryption_key, http_client_factory=backup_http_client_factory)

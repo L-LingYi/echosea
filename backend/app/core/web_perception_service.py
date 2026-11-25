@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from html.parser import HTMLParser
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 import httpx
 from sqlalchemy import select
@@ -249,6 +249,7 @@ class WebPerceptionService:
         searxng_url: str = "",
         default_free_search_enabled: bool = True,
         search_timeout_seconds: float = 8.0,
+        webpage_fetch_enabled: bool = True,
     ) -> None:
         self.master_key = master_key
         self._feed_fetcher = feed_fetcher
@@ -256,6 +257,7 @@ class WebPerceptionService:
         self.searxng_url = searxng_url.strip().rstrip("/")
         self.default_free_search_enabled = default_free_search_enabled
         self.search_timeout_seconds = search_timeout_seconds
+        self.webpage_fetch_enabled = webpage_fetch_enabled
 
     async def refresh_daily_briefing(self, session: AsyncSession) -> DailyBriefing | None:
         """Slow channel: fetch enabled RSS/Atom/JSON sources and distill today's background briefing."""
@@ -446,18 +448,37 @@ class WebPerceptionService:
 
         return ""
 
-    async def fetch_webpage(self, url: str, max_chars: int = 2800) -> str:
-        """Fetch and extract clean plain text from a public HTTP(S) webpage (SSRF-protected)."""
+    async def fetch_webpage(self, url: str, max_chars: int = 2800, max_redirects: int = 5) -> str:
+        """Fetch and extract clean plain text from a public HTTP(S) webpage (hop-by-hop SSRF-protected)."""
+        if not self.webpage_fetch_enabled:
+            return "网页正文读取功能当前已关闭。"
         url = (url or "").strip()
         if not _is_public_http_url(url):
             return "无法访问该地址（仅支持公网 HTTP/HTTPS 页面）。"
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(self.search_timeout_seconds, connect=3.0),
-                follow_redirects=True,
+                follow_redirects=False,
                 headers=_BROWSER_HEADERS,
             ) as client:
-                resp = await client.get(url)
+                current_url = url
+                resp: httpx.Response | None = None
+                for hop in range(max_redirects + 1):
+                    resp = await client.get(current_url)
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        location = (resp.headers.get("location") or "").strip()
+                        if not location:
+                            return "网页抓取失败: EmptyRedirectLocation"
+                        if hop >= max_redirects:
+                            return "网页抓取失败: TooManyRedirects"
+                        next_url = urljoin(current_url, location)
+                        if not _is_public_http_url(next_url):
+                            logger.warning("Blocked unsafe redirect from '%s' -> '%s'", current_url, next_url)
+                            return "无法访问该地址（重定向目标非公网安全地址）。"
+                        current_url = next_url
+                        continue
+                    break
+                assert resp is not None
                 resp.raise_for_status()
                 ctype = (resp.headers.get("content-type") or "").lower()
                 if "json" in ctype or "text/plain" in ctype:

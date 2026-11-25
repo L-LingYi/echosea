@@ -277,3 +277,107 @@ async def test_autonomous_search_sends_filler_first_and_synthesizes_in_isolated_
         # Verify web_search stage is traced in dashboard traces
         traces = client.get(f"/api/dashboard/traces?request_id={resp['request_id']}", headers=headers).json()
         assert any(t["stage"] == "web_search" and t["status"] == "ok" for t in traces)
+
+
+@pytest.mark.asyncio
+async def test_fetch_webpage_blocks_unsafe_redirects_and_allows_safe_ones(monkeypatch):
+    visited_urls: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        visited_urls.append(url)
+        if url == "https://example.com/redir-loopback":
+            return httpx.Response(302, headers={"Location": "http://127.0.0.1:8000/healthz"})
+        if url == "https://example.com/redir-private":
+            return httpx.Response(307, headers={"Location": "http://192.168.1.10/secret"})
+        if url == "https://example.com/redir-metadata":
+            return httpx.Response(301, headers={"Location": "http://169.254.169.254/latest/meta-data/"})
+        if url == "https://example.com/redir-file":
+            return httpx.Response(302, headers={"Location": "file:///etc/passwd"})
+        if url == "https://example.com/redir-safe":
+            return httpx.Response(302, headers={"Location": "/article/ok"})
+        if url == "https://example.com/article/ok":
+            return httpx.Response(200, headers={"content-type": "text/html"}, text="<html><body><p>安全跳转正文</p></body></html>")
+        if url.startswith("https://example.com/hop-"):
+            idx = int(url.rsplit("-", 1)[-1])
+            return httpx.Response(302, headers={"Location": f"/hop-{idx + 1}"})
+        return httpx.Response(404)
+
+    client_cls = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client_cls(transport=httpx.MockTransport(respond), **kw))
+
+    svc = WebPerceptionService(master_key="k", searxng_url="http://searxng:8080")
+
+    for bad_url in (
+        "https://example.com/redir-loopback",
+        "https://example.com/redir-private",
+        "https://example.com/redir-metadata",
+        "https://example.com/redir-file",
+    ):
+        res = await svc.fetch_webpage(bad_url)
+        assert "无法访问" in res
+
+    # Unsafe redirect targets MUST NEVER be requested
+    assert not any("127.0.0.1" in u or "192.168." in u or "169.254." in u or u.startswith("file:") for u in visited_urls)
+
+    # Safe relative/public redirect still works
+    ok_res = await svc.fetch_webpage("https://example.com/redir-safe")
+    assert "安全跳转正文" in ok_res
+
+    # Excessive redirect hops are stopped safely
+    loop_res = await svc.fetch_webpage("https://example.com/hop-0")
+    assert "TooManyRedirects" in loop_res
+
+    # Independent toggle disables webpage fetch while keeping SearXNG search available
+    disabled_svc = WebPerceptionService(master_key="k", searxng_url="http://searxng:8080", webpage_fetch_enabled=False)
+    assert "已关闭" in await disabled_svc.fetch_webpage("https://example.com/article/ok")
+
+
+def test_webpage_fetch_toggle_keeps_web_search_enabled(monkeypatch):
+    seen_tool_names: list[list[str]] = []
+
+    async def fake_search(query: str):
+        return [{"title": "测试结果", "url": "https://example.com/1", "snippet": "SearXNG 正常"}]
+
+    async def fake_llm(provider, api_key, messages, temperature, max_tokens, tools=None, **_kwargs):
+        if tools is not None:
+            seen_tool_names.append([t["function"]["name"] for t in tools])
+        return {
+            "choices": [{"message": {"content": "直接回答啦"}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+        }
+
+    settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        snowluma_access_token="tok-toggle",
+        snowluma_http_url="",
+        bot_qq=888888,
+        webpage_fetch_enabled=False,
+        admin_default_username="admin",
+        admin_default_password="ToggleTestPass2026!",
+    )
+    app = create_app(
+        settings_override=settings,
+        force_memory_store=True,
+        http_caller=fake_llm,
+        search_caller=fake_search,
+    )
+    with TestClient(app) as client:
+        token = client.post("/api/auth/login", json={"username": "admin", "password": "ToggleTestPass2026!"}).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        client.put(
+            "/api/providers",
+            headers=headers,
+            json={"slot": "main_brain", "role": "primary", "name": "M", "base_url": "https://api.test/v1", "model_name": "m1", "api_key": "sk-1234"},
+        )
+        res = client.post(
+            "/api/onebot/event?access_token=tok-toggle",
+            json={
+                "post_type": "message", "message_type": "group", "self_id": 888888,
+                "group_id": 7788, "user_id": 50001, "message_id": "m_tog",
+                "sender": {"nickname": "测试"}, "message": [{"type": "text", "data": {"text": "小呆呆查一下"}}],
+            },
+        ).json()
+        assert res["handled"] == "direct_pass"
+        assert seen_tool_names and seen_tool_names[0] == ["web_search"]
+
