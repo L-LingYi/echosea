@@ -311,9 +311,10 @@ class ModelHubService:
             **cd,
         }
 
-    async def get_today_spend_usd(self, session: AsyncSession) -> float:
-        now = datetime.now(timezone.utc)
-        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    async def get_today_spend_usd(self, session: AsyncSession, start_of_day: datetime | None = None) -> float:
+        if start_of_day is None:
+            now = datetime.now(timezone.utc)
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         stmt = select(func.coalesce(func.sum(UsageMetric.estimated_cost_usd), 0.0)).where(
             UsageMetric.created_at >= start_of_day,
             UsageMetric.source != "probe",

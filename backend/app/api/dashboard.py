@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import inspect
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -38,6 +39,13 @@ def _to_local(dt: datetime, tz_delta: timedelta) -> datetime:
     return utc_dt + tz_delta
 
 
+def _local_today_start_utc(now_utc: datetime, tz_offset_minutes: int) -> datetime:
+    """Return the UTC timestamp corresponding to 00:00:00 of the caller's local day."""
+    tz_delta = timedelta(minutes=tz_offset_minutes)
+    today_local = (now_utc + tz_delta).date()
+    return datetime(today_local.year, today_local.month, today_local.day, tzinfo=timezone.utc) - tz_delta
+
+
 async def _build_usage_series(
     session: AsyncSession,
     now_utc: datetime,
@@ -48,7 +56,7 @@ async def _build_usage_series(
     now_local = now_utc + tz_delta
     today_local = now_local.date()
     start_day_local = today_local - timedelta(days=days - 1)
-    start_day_utc = datetime(start_day_local.year, start_day_local.month, start_day_local.day, tzinfo=timezone.utc) - tz_delta
+    start_day_utc = _local_today_start_utc(now_utc, tz_offset_minutes) - timedelta(days=days - 1)
 
     current_hour_local = now_local.replace(minute=0, second=0, microsecond=0)
     start_hour_local = current_hour_local - timedelta(hours=23)
@@ -191,7 +199,7 @@ async def dashboard_overview(
 
     cache_hit_rate = round((cached_tok / prompt_tok) * 100, 2) if prompt_tok else 0.0
 
-    start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_today = _local_today_start_utc(now_utc, tz_offset_minutes)
     today_tok_stmt = select(
         func.coalesce(func.sum(UsageMetric.prompt_tokens), 0),
         func.coalesce(func.sum(UsageMetric.completion_tokens), 0),
@@ -330,7 +338,11 @@ async def dashboard_overview(
         (await session.execute(select(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(5))).scalars().all()
     )
 
-    today_spend = await runtime.model_hub.get_today_spend_usd(session)
+    get_today_spend = runtime.model_hub.get_today_spend_usd
+    if "start_of_day" in inspect.signature(get_today_spend).parameters:
+        today_spend = await get_today_spend(session, start_of_day=start_of_today)
+    else:
+        today_spend = await get_today_spend(session)
     budget_limit = runtime.model_hub.daily_budget_usd
     usage_series = await _build_usage_series(session, now_utc, max(days, 30), tz_offset_minutes)
 

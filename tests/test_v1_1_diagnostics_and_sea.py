@@ -205,3 +205,111 @@ def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousne
         assert bench["false_negatives"] == 0
         assert bench["voice_mismatches"] == 0
         assert bench["accuracy_pct"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_today_metrics_align_with_local_midnight(monkeypatch):
+    from datetime import datetime, timezone
+    from app.api import dashboard as dashboard_api
+    from app.models.db import TTSDelivery, UsageMetric
+
+    fixed_now_utc = datetime(2026, 11, 25, 16, 2, 57, tzinfo=timezone.utc)  # 2026-11-26 00:02:57+08:00
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now_utc if tz is timezone.utc else fixed_now_utc.astimezone(tz)
+
+    monkeypatch.setattr(dashboard_api, "datetime", _FrozenDatetime)
+
+    settings = Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        snowluma_access_token="tok-tz",
+        snowluma_http_url="",
+        bot_qq=888888,
+        admin_qq=999999,
+        admin_default_username="admin",
+        admin_default_password="TzTestPassword!",
+    )
+    app = create_app(settings_override=settings, force_memory_store=True)
+
+    with TestClient(app) as client:
+        async def _seed():
+            async with app.state.db_manager.session_factory() as session:
+                session.add_all(
+                    [
+                        # 2026-11-25 23:30+08:00 (yesterday locally, same UTC day)
+                        UsageMetric(
+                            slot="main_brain",
+                            provider_name="p",
+                            model_name="m",
+                            prompt_tokens=1000,
+                            completion_tokens=200,
+                            cached_tokens=100,
+                            estimated_cost_usd=0.5,
+                            ttft_ms=100,
+                            total_ms=100,
+                            source="production",
+                            success=True,
+                            created_at=datetime(2026, 11, 25, 15, 30, 0, tzinfo=timezone.utc),
+                        ),
+                        # 2026-11-26 00:01+08:00 (today locally)
+                        UsageMetric(
+                            slot="main_brain",
+                            provider_name="p",
+                            model_name="m",
+                            prompt_tokens=300,
+                            completion_tokens=50,
+                            cached_tokens=30,
+                            estimated_cost_usd=0.15,
+                            ttft_ms=80,
+                            total_ms=80,
+                            source="production",
+                            success=True,
+                            created_at=datetime(2026, 11, 25, 16, 1, 0, tzinfo=timezone.utc),
+                        ),
+                        TTSDelivery(
+                            scene="group",
+                            target_id=1001,
+                            intent="answer_voice",
+                            cleaned_text="昨天晚上的语音",
+                            synthesis_status="synthesized",
+                            onebot_status="accepted",
+                            created_at=datetime(2026, 11, 25, 15, 30, 0, tzinfo=timezone.utc),
+                        ),
+                        TTSDelivery(
+                            scene="group",
+                            target_id=1001,
+                            intent="answer_voice",
+                            cleaned_text="今天凌晨",
+                            synthesis_status="synthesized",
+                            onebot_status="accepted",
+                            created_at=datetime(2026, 11, 25, 16, 1, 0, tzinfo=timezone.utc),
+                        ),
+                    ]
+                )
+                await session.commit()
+
+        await _seed()
+
+        token = client.post("/api/auth/login", json={"username": "admin", "password": "TzTestPassword!"}).json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        dash_cst = client.get("/api/dashboard/overview?days=7&tz_offset_minutes=480", headers=headers).json()
+        assert dash_cst["tokens"]["today_total_tokens"] == 350
+        assert dash_cst["tokens"]["today_prompt_tokens"] == 300
+        assert dash_cst["tokens"]["today_completion_tokens"] == 50
+        assert dash_cst["tokens"]["today_cached_tokens"] == 30
+        assert dash_cst["tokens"]["total_tokens"] == 1550
+        assert dash_cst["tts"]["today_chars"] == len("今天凌晨")
+        assert dash_cst["tts"]["total_chars"] == len("昨天晚上的语音") + len("今天凌晨")
+        assert dash_cst["cost"]["today_spend_usd"] == pytest.approx(0.15)
+        assert dash_cst["usage_series"]["daily"][-1]["date"] == "2026-11-26"
+        assert dash_cst["usage_series"]["daily"][-1]["tokens"] == 350
+        assert dash_cst["usage_series"]["daily"][-1]["tts_chars"] == len("今天凌晨")
+
+        dash_utc = client.get("/api/dashboard/overview?days=7&tz_offset_minutes=0", headers=headers).json()
+        assert dash_utc["tokens"]["today_total_tokens"] == 1550
+        assert dash_utc["tts"]["today_chars"] == len("昨天晚上的语音") + len("今天凌晨")
+        assert dash_utc["cost"]["today_spend_usd"] == pytest.approx(0.65)
+
