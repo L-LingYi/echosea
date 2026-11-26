@@ -426,3 +426,73 @@ async def test_v192_sticker_db_matching_and_shared_prompt_injection(db_session):
     )
     assert "[斗图配图协议]" in msgs[0]["content"]
     assert "[表情:" in msgs[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_v192_active_attention_mentioning_other_member_disambiguates_via_gatekeeper():
+    """During an active bot chat, referencing @other_user ('给你介绍一下蓝豆是@某人') goes to Gatekeeper LLM."""
+    store = StateStore(force_memory=True)
+    await store.connect()
+    gk = GatekeeperService(store=store)
+
+    # Turn 1: User talks to bot -> opens active attention window
+    d1 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="att_m1",
+            scene="group",
+            group_id=9500,
+            sender_qq=8001,
+            sender_nickname="灵弈",
+            raw_text="小呆呆你感觉现在怎么样",
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+    )
+    assert d1.action == "direct_pass"
+
+    # Turn 2: User introduces another member using @other_user while still talking to bot
+    async def _llm_says_bot(env, default_target):
+        return {"target": "bot", "score": 0.90, "reason": "Continuing chat with bot while introducing another member"}
+
+    d2 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="att_m2",
+            scene="group",
+            group_id=9500,
+            sender_qq=8001,
+            sender_nickname="灵弈",
+            raw_text="给你介绍一下蓝豆是 这个人",
+            mentioned_qqs=[99999],
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+        llm_scorer=_llm_says_bot,
+    )
+    assert d2.action == "soft_entry"
+    assert d2.target == "bot"
+
+    # Turn 3: If user genuinely switches to addressing @other_user, Gatekeeper LLM returns other_user -> silent + clears attention
+    async def _llm_says_other(env, default_target):
+        return {"target": "other_user", "score": 0.10, "reason": "Addressing another member directly"}
+
+    d3 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="att_m3",
+            scene="group",
+            group_id=9500,
+            sender_qq=8001,
+            sender_nickname="灵弈",
+            raw_text="走开黑去",
+            mentioned_qqs=[99999],
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+        llm_scorer=_llm_says_other,
+    )
+    assert d3.action == "silent"
+    assert d3.target == "other_user"
+    assert await store.get_user_attention_age_seconds(9500, 8001) is None
+

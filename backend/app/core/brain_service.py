@@ -689,6 +689,30 @@ class CompanionPipeline:
                 f"Quoted: {env.expanded_reply_text or 'none'}\n"
                 f"Latest message: {latest_msg_display}"
             )
+            gk_bot_qq = env.self_qq or self.adapter.bot_qq
+            gk_other_mentioned = [q for q in env.mentioned_qqs if q != gk_bot_qq]
+            if gk_other_mentioned:
+                other_idents = {
+                    row.qq_id: row
+                    for row in (
+                        await session.execute(select(QQIdentity).where(QQIdentity.qq_id.in_(gk_other_mentioned)))
+                    ).scalars().all()
+                }
+                other_labels: list[str] = []
+                for q in gk_other_mentioned:
+                    ident = other_idents.get(q)
+                    if ident is not None:
+                        cards = ident.group_cards if isinstance(ident.group_cards, dict) else {}
+                        gname = cards.get(str(env.group_id)) if env.group_id else None
+                        disp = str(gname or ident.nickname or "").strip()
+                        other_labels.append(f"{disp}(QQ:{q})" if disp else f"QQ:{q}")
+                    else:
+                        other_labels.append(f"QQ:{q}")
+                state_text += (
+                    f"\n[Message @mentions Other Group Member(s)] Mentioned: {', '.join(other_labels)}. "
+                    "Distinguish carefully: is the sender addressing that member ('other_user') OR continuing "
+                    "the conversation with the bot while merely referring to/introducing that member ('bot')?"
+                )
             if env.scene == "group" and env.group_id is not None:
                 att_age = await self.store.get_user_attention_age_seconds(env.group_id, env.sender_qq)
                 att_meta = await self.store.get_user_attention_meta(env.group_id, env.sender_qq)

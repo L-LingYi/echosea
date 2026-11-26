@@ -142,18 +142,29 @@ class GatekeeperService:
         is_direct_alias = bool(matched_alias and self._is_direct_call(text, matched_alias))
 
         # Record peer-to-peer interaction when user explicitly @s another group member (unless addressing bot)
+        # Exception: if the sender is actively chatting with the bot (inside attention window) and a Gatekeeper LLM
+        # is available, let the LLM disambiguate referring to/introducing @other vs. addressing @other directly.
         if other_mentioned and not bot_mentioned and not replied_to_bot and not is_direct_alias:
-            await self.store.clear_user_attention(group_id, envelope.sender_qq)
-            for peer_qq in other_mentioned:
-                await self.store.record_peer_interaction(group_id, envelope.sender_qq, peer_qq)
-            await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=True)
-            return GatekeeperDecision(
-                action="silent",
-                target="other_user",
-                score=0.05,
-                reason="Hard rule: message explicitly @mentions another member, not bot",
-                should_record_ambient=True,
-            )
+            in_active_bot_chat = False
+            if (
+                llm_scorer is not None
+                and not any(cue in text for cue in GOODBYE_CUES)
+                and not (envelope.reply_to_msg_id and not replied_to_bot)
+            ):
+                att_age = await self.store.get_user_attention_age_seconds(group_id, envelope.sender_qq)
+                in_active_bot_chat = att_age is not None and att_age <= self.attention_decay_seconds
+            if not in_active_bot_chat:
+                await self.store.clear_user_attention(group_id, envelope.sender_qq)
+                for peer_qq in other_mentioned:
+                    await self.store.record_peer_interaction(group_id, envelope.sender_qq, peer_qq)
+                await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=True)
+                return GatekeeperDecision(
+                    action="silent",
+                    target="other_user",
+                    score=0.05,
+                    reason="Hard rule: message explicitly @mentions another member, not bot",
+                    should_record_ambient=True,
+                )
 
         # Explicit @bot or accurate reply-to-bot -> High-priority direct pass
         if bot_mentioned or replied_to_bot:
@@ -369,6 +380,9 @@ class GatekeeperService:
                     if llm_result.get("target") == "other_user":
                         if in_attention_window:
                             await self.store.clear_user_attention(group_id, envelope.sender_qq)
+                        for peer_qq in envelope.mentioned_qqs:
+                            if peer_qq != envelope.self_qq:
+                                await self.store.record_peer_interaction(group_id, envelope.sender_qq, peer_qq)
                         return GatekeeperDecision(
                             action="silent",
                             target="other_user",
