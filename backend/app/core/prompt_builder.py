@@ -240,7 +240,7 @@ def build_prompt_messages(
                 recent = "\n".join(recent_lines)
                 dynamic_parts.append(f"[近期群聊/私聊上下文（严格按发言人区分，切勿张冠李戴）]\n{recent}")
     if mentioned_users:
-        dynamic_parts.append(f"[本条消息@提及的群友] {', '.join(mentioned_users)}")
+        dynamic_parts.append(f"[本条消息提及/关联的群友档案（含手动标注称呼与公开画像）] {' | '.join(mentioned_users)}")
     dynamic_parts.append(
         f"[发言人归属锚点] 下面即将回复的这条消息由「{envelope.display_name}」(QQ:{envelope.sender_qq})发出。"
         "请务必分清上下文中每一位群友各自说的话，不要把别人(例如前一条发言人)的特征或观点错安到当前发言人头上。"

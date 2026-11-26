@@ -496,3 +496,85 @@ async def test_v192_active_attention_mentioning_other_member_disambiguates_via_g
     assert d3.target == "other_user"
     assert await store.get_user_attention_age_seconds(9500, 8001) is None
 
+
+@pytest.mark.asyncio
+async def test_mentioned_and_alias_referenced_user_preferred_address_injected_in_prompt(db_session):
+    """Manually tagged preferred_address (e.g. 蓝豆) must be visible when asking via @mention OR by alias text, without leaking private_profile."""
+    captured: list[str] = []
+
+    async def mock_llm(_p, _k, messages, _t, _m, **_kw):
+        captured.append("\n".join(str(m.get("content") or "") for m in messages))
+        return {"choices": [{"message": {"content": "他叫蓝豆呀"}}]}
+
+    store = StateStore(force_memory=True)
+    hub = ModelHubService("k-pref", AlertService("k-pref"), http_caller=mock_llm)
+    await hub.upsert_provider(
+        db_session,
+        {
+            "slot": "main_brain",
+            "role": "primary",
+            "name": "Brain-Pref",
+            "protocol": "openai_compatible",
+            "base_url": "https://api.example.com/v1",
+            "model_name": "m1",
+            "api_key": "k",
+        },
+    )
+    pipe = CompanionPipeline(
+        store=store,
+        identity_service=IdentityService(),
+        gatekeeper=GatekeeperService(store=store),
+        memory_service=MemoryService(),
+        model_hub=hub,
+        adapter=SnowLumaAdapter(http_url=""),
+        event_bus=PluginEventBus(),
+    )
+
+    ident = await pipe.identity_service.upsert_from_message(
+        db_session, qq_id=1983133592, nickname="『』", group_card="如果情绪有天气 那我困在阴天里", group_id=486135657
+    )
+    ident.public_profile = {"relationship": {"preferred_address": "蓝豆", "interaction_style": "", "boundaries": []}}
+    ident.private_profile = {"relationship": {"preferred_address": "秘密代号", "interaction_style": "", "boundaries": []}}
+    await db_session.commit()
+
+    # 1. Asking with @mention -> injects 习惯叫:蓝豆, never leaks 秘密代号 in group chat
+    r1 = await pipe.handle_raw_onebot_event(
+        db_session,
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 2164459727,
+            "group_id": 486135657,
+            "user_id": 2445955246,
+            "message_id": "pref_m1",
+            "sender": {"user_id": 2445955246, "nickname": "灵丶弈"},
+            "message": [
+                {"type": "text", "data": {"text": "小呆呆我at的这个人怎么称呼 "}},
+                {"type": "at", "data": {"qq": "1983133592"}},
+            ],
+        },
+    )
+    assert r1["handled"] == "direct_pass"
+    assert "习惯叫:蓝豆" in captured[-1]
+    assert "如果情绪有天气 那我困在阴天里(QQ:1983133592)" in captured[-1]
+    assert "秘密代号" not in captured[-1]
+
+    # 2. Asking by custom alias text WITHOUT @mention -> still resolves QQ 1983133592 & injects 习惯叫:蓝豆
+    r2 = await pipe.handle_raw_onebot_event(
+        db_session,
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 2164459727,
+            "group_id": 486135657,
+            "user_id": 2445955246,
+            "message_id": "pref_m2",
+            "sender": {"user_id": 2445955246, "nickname": "灵丶弈"},
+            "message": [{"type": "text", "data": {"text": "小呆呆，蓝豆是谁啊"}}],
+        },
+    )
+    assert r2["handled"] == "direct_pass"
+    assert "习惯叫:蓝豆" in captured[-1]
+    assert "1983133592" in captured[-1]
+    assert "秘密代号" not in captured[-1]
+

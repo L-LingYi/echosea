@@ -24,6 +24,7 @@ from app.core.identity_service import IdentityService
 from app.core.memory_service import MemoryService
 from app.core.model_hub import ModelHubService
 from app.core.multimodal_service import MultimodalService, resolve_image_phash
+from app.core.profile_schema import format_acquaintance_brief, normalize_profile
 from app.core.prompt_builder import (
     DEFAULT_BANNED_PHRASES,
     DEFAULT_SYSTEM_PROMPT,
@@ -909,23 +910,67 @@ class CompanionPipeline:
 
         bot_qq = envelope.self_qq or self.adapter.bot_qq
         other_mentioned_qqs = [q for q in envelope.mentioned_qqs if q != bot_qq]
-        mentioned_users: list[str] = []
+        if envelope.quoted_sender_qq and envelope.quoted_sender_qq not in (bot_qq, envelope.sender_qq):
+            if envelope.quoted_sender_qq not in other_mentioned_qqs:
+                other_mentioned_qqs.append(envelope.quoted_sender_qq)
+
+        ident_rows: dict[int, QQIdentity] = {}
         if other_mentioned_qqs:
-            ident_rows = {
-                row.qq_id: row
-                for row in (
-                    await session.execute(select(QQIdentity).where(QQIdentity.qq_id.in_(other_mentioned_qqs)))
-                ).scalars().all()
-            }
-            for q in other_mentioned_qqs:
-                ident = ident_rows.get(q)
-                if ident is not None:
-                    cards = ident.group_cards if isinstance(ident.group_cards, dict) else {}
-                    group_name = cards.get(str(envelope.group_id)) if envelope.group_id else None
-                    disp = str(group_name or ident.nickname or "").strip()
-                    mentioned_users.append(f"{disp}(QQ:{q})" if disp else f"QQ:{q}")
-                else:
-                    mentioned_users.append(f"QQ:{q}")
+            for row in (
+                await session.execute(select(QQIdentity).where(QQIdentity.qq_id.in_(other_mentioned_qqs)))
+            ).scalars().all():
+                ident_rows[row.qq_id] = row
+
+        # Also resolve group members referenced by custom preferred_address / nickname / group card in raw_text
+        raw_lower = (envelope.raw_text or "").strip().lower()
+        if raw_lower and len(other_mentioned_qqs) < 4:
+            recent_idents = (
+                await session.execute(select(QQIdentity).order_by(QQIdentity.last_seen_at.desc()).limit(80))
+            ).scalars().all()
+            gid_str = str(envelope.group_id) if envelope.group_id else ""
+            for ident in recent_idents:
+                if ident.qq_id in (bot_qq, envelope.sender_qq) or ident.qq_id in ident_rows:
+                    continue
+                cards = ident.group_cards if isinstance(ident.group_cards, dict) else {}
+                pub = normalize_profile(ident.public_profile or {}, relationship_level=ident.relationship_level)
+                pref_addr = str((pub.get("relationship") or {}).get("preferred_address") or "").strip()
+                aliases = [
+                    pref_addr,
+                    str(cards.get(gid_str) or "").strip() if gid_str else "",
+                    str(ident.nickname or "").strip(),
+                    *[str(n).strip() for n in (ident.known_names or []) if isinstance(n, str)],
+                ]
+                if any(len(a) >= 2 and a.lower() in raw_lower for a in aliases if a):
+                    ident_rows[ident.qq_id] = ident
+                    other_mentioned_qqs.append(ident.qq_id)
+                    if len(other_mentioned_qqs) >= 4:
+                        break
+
+        mentioned_users: list[str] = []
+        for q in other_mentioned_qqs[:4]:
+            ident = ident_rows.get(q)
+            if ident is not None:
+                cards = ident.group_cards if isinstance(ident.group_cards, dict) else {}
+                group_name = cards.get(str(envelope.group_id)) if envelope.group_id else None
+                disp = str(group_name or ident.nickname or "").strip()
+                brief = format_acquaintance_brief(
+                    {
+                        "relationship_level": ident.relationship_level,
+                        "public_profile": ident.public_profile or {},
+                        "private_profile": ident.private_profile if envelope.scene == "private" else {},
+                    },
+                    envelope.scene,
+                    max_chars=90,
+                )
+                extra_bits: list[str] = []
+                if ident.nickname and disp and ident.nickname.strip() != disp:
+                    extra_bits.append(f"昵称:{ident.nickname.strip()}")
+                if brief:
+                    extra_bits.append(brief)
+                meta_str = f" [{'；'.join(extra_bits)}]" if extra_bits else ""
+                mentioned_users.append(f"{disp}(QQ:{q}){meta_str}" if disp else f"QQ:{q}{meta_str}")
+            else:
+                mentioned_users.append(f"QQ:{q}")
 
         sticker_tags_hint: list[str] | None = None
         if self.sticker_service is not None:
