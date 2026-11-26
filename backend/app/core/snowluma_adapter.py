@@ -10,12 +10,14 @@ Supports:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
 import uuid
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -381,6 +383,21 @@ class SnowLumaAdapter:
         await session.flush()
         return delivery
 
+    @staticmethod
+    def _prepare_sticker_file(sticker_url_or_path: str) -> str:
+        """Convert local cached sticker files into base64:// payloads for cross-container SnowLuma delivery."""
+        raw = (sticker_url_or_path or "").strip()
+        if not raw or raw.startswith(("http://", "https://", "base64://", "file://")):
+            return raw
+        try:
+            p = Path(raw)
+            if p.is_file():
+                encoded = base64.b64encode(p.read_bytes()).decode("ascii")
+                return f"base64://{encoded}"
+        except Exception as exc:
+            logger.debug("Failed to base64-encode local sticker file %s: %s", raw, exc)
+        return raw
+
     async def send_sticker(
         self,
         session: AsyncSession,
@@ -388,7 +405,7 @@ class SnowLumaAdapter:
         target_id: int,
         sticker_url_or_path: str,
     ) -> OutboxDelivery:
-        """Send a sticker image segment via SnowLuma OneBot v11."""
+        """Send an image segment marked as a QQ sticker (sub_type=1) via SnowLuma OneBot v11."""
         echo = f"stk_{uuid.uuid4().hex[:12]}"
         delivery = OutboxDelivery(
             scene=scene,
@@ -400,7 +417,18 @@ class SnowLumaAdapter:
         session.add(delivery)
         await session.flush()
 
-        segments = [{"type": "image", "data": {"file": sticker_url_or_path}}]
+        file_payload = self._prepare_sticker_file(sticker_url_or_path)
+        segments = [
+            {
+                "type": "image",
+                "data": {
+                    "file": file_payload,
+                    "sub_type": 1,
+                    "subType": 1,
+                    "summary": "[动画表情]",
+                },
+            }
+        ]
         action = "send_group_msg" if scene == "group" else "send_private_msg"
         params = (
             {"group_id": target_id, "message": segments}

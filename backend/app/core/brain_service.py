@@ -1282,11 +1282,23 @@ class CompanionPipeline:
         if not cancelled_stale and sticker_tags and self.sticker_service is not None:
             asset = await self.sticker_service.pick_sticker_for_tag(session, sticker_tags[0])
             if asset and (asset.source_url or asset.file_path):
+                from pathlib import Path as _Path
+
+                src_url = (asset.source_url or "").strip()
+                local_path = (asset.file_path or "").strip()
+                is_ephemeral_qq_url = any(
+                    host in src_url.lower()
+                    for host in ("multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn")
+                )
+                if local_path and _Path(local_path).is_file() and (not src_url or is_ephemeral_qq_url):
+                    sticker_source = local_path
+                else:
+                    sticker_source = src_url or local_path
                 stk_out = await self.adapter.send_sticker(
                     session,
                     envelope.scene,
                     target_id or envelope.sender_qq,
-                    asset.source_url or asset.file_path,
+                    sticker_source,
                 )
                 stk_out.request_id = request_id
                 stk_out.feedback_status = "none"

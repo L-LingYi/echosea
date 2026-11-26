@@ -578,3 +578,45 @@ async def test_mentioned_and_alias_referenced_user_preferred_address_injected_in
     assert "1983133592" in captured[-1]
     assert "秘密代号" not in captured[-1]
 
+
+@pytest.mark.asyncio
+async def test_send_sticker_uses_onebot_sticker_subtype_and_local_base64(db_session, tmp_path):
+    """Stickers must be sent as OneBot v11 sticker image segments (sub_type=1, summary=[动画表情]),
+    and local cached sticker files should be base64-encoded for cross-container SnowLuma delivery."""
+    adapter = SnowLumaAdapter(http_url="")
+    sent_payloads: list[tuple[str, dict]] = []
+
+    async def fake_send(action: str, params: dict, echo: str):
+        sent_payloads.append((action, params))
+        return "accepted", "msg_stk_1"
+
+    adapter._send = fake_send  # type: ignore[method-assign]
+
+    # 1. Remote URL sticker
+    out1 = await adapter.send_sticker(db_session, "group", 486135657, "https://img.example.com/meme.gif")
+    assert out1.status == "sent"
+    action1, params1 = sent_payloads[-1]
+    assert action1 == "send_group_msg"
+    seg1 = params1["message"][0]
+    assert seg1["type"] == "image"
+    assert seg1["data"]["file"] == "https://img.example.com/meme.gif"
+    assert seg1["data"]["sub_type"] == 1
+    assert seg1["data"]["subType"] == 1
+    assert seg1["data"]["summary"] == "[动画表情]"
+
+    # 2. Local cached sticker file -> converted to base64://
+    local_file = tmp_path / "cached_meme.bin"
+    raw_bytes = b"\x89PNG\r\n\x1a\nfake-sticker-bytes"
+    local_file.write_bytes(raw_bytes)
+    out2 = await adapter.send_sticker(db_session, "private", 1983133592, str(local_file))
+    assert out2.status == "sent"
+    action2, params2 = sent_payloads[-1]
+    assert action2 == "send_private_msg"
+    seg2 = params2["message"][0]
+    assert seg2["type"] == "image"
+    assert seg2["data"]["file"].startswith("base64://")
+    assert seg2["data"]["sub_type"] == 1
+    assert seg2["data"]["subType"] == 1
+    assert seg2["data"]["summary"] == "[动画表情]"
+
+
