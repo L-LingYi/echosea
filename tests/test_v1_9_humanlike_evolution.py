@@ -140,6 +140,7 @@ async def test_v190_implicit_social_feedback_reinforces_memory_and_tunes_thresho
                 payload_text=f"冷场消息{idx}",
                 status="sent",
                 feedback_status="pending",
+                gatekeeper_action="soft_entry",
                 created_at=now - timedelta(minutes=10),
             )
         )
@@ -689,10 +690,18 @@ async def test_v190_l1_bubble_storage_identity_anchor_and_casual_punctuation(db_
         ),
     )
     assert res1["bubbles"] == ["哎呀今天群里怎么突然这么热闹呀", "感觉大家现在心情都很不错呢"]
-    bot_msg = (
-        await db_session.execute(select(ChatMessage).where(ChatMessage.gatekeeper_decision == "bot_reply"))
-    ).scalar_one()
-    assert bot_msg.raw_text == "哎呀今天群里怎么突然这么热闹呀\n感觉大家现在心情都很不错呢"
+    bot_msgs = list(
+        (
+            await db_session.execute(
+                select(ChatMessage)
+                .where(ChatMessage.gatekeeper_decision == "bot_reply")
+                .order_by(ChatMessage.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [m.raw_text for m in bot_msgs] == ["哎呀今天群里怎么突然这么热闹呀", "感觉大家现在心情都很不错呢"]
 
     # Turn 2: prompt static prefix has self-identity anchor, and L1 renders [我(小呆呆)] per bubble
     await pipe.process_envelope(

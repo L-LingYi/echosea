@@ -823,6 +823,15 @@ class CompanionPipeline:
                 await self.tts_service.mark_onebot_receipt(session, tts_res["delivery_id"], out.onebot_echo, out.onebot_status)
                 await self._trace(session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status)
                 if out.status == "sent":
+                    await self._record_bot_chat_messages(
+                        session=session,
+                        envelope=envelope,
+                        persona=persona,
+                        request_id=request_id,
+                        target_id=target_id,
+                        sent_items=[(quoted_text, out.onebot_message_id)],
+                        should_quote=False,
+                    )
                     return {"handled": "voice_read_quote", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
             out = await self.adapter.send_message(session, envelope.scene, target_id or envelope.sender_qq, quoted_text)
             out.request_id = request_id
@@ -894,6 +903,10 @@ class CompanionPipeline:
                 else:
                     mentioned_users.append(f"QQ:{q}")
 
+        sticker_tags_hint: list[str] | None = None
+        if self.sticker_service is not None:
+            sticker_tags_hint = await self.sticker_service.get_top_approved_tags(session, limit=8)
+
         messages = self.build_prompt_messages(
             persona,
             memory_ctx,
@@ -906,6 +919,7 @@ class CompanionPipeline:
             vision_hints=vision_hints or None,
             correction_hints=correction_hints or None,
             mentioned_users=mentioned_users or None,
+            sticker_tags_hint=sticker_tags_hint or None,
         )
 
         # 8. Invoke Main Brain via Model Control Center (with autonomous Tool Calling)
@@ -972,7 +986,19 @@ class CompanionPipeline:
                     "text": filler_text,
                     "status": f_out.status,
                     "onebot_status": f_out.onebot_status,
+                    "onebot_message_id": f_out.onebot_message_id,
                 }
+                if f_out.status == "sent":
+                    await self._record_bot_chat_messages(
+                        session=session,
+                        envelope=envelope,
+                        persona=persona,
+                        request_id=request_id,
+                        target_id=target_id,
+                        sent_items=[(filler_text, f_out.onebot_message_id)],
+                        should_quote=False,
+                        fallback_suffix="filler",
+                    )
             completion, search_queries = await self.search_orchestrator.execute_isolated_search_session(
                 session=session,
                 persona=persona,
@@ -1049,6 +1075,15 @@ class CompanionPipeline:
                     latency_ms=int((time.perf_counter() - t_ob) * 1000),
                 )
                 if out.status == "sent":
+                    await self._record_bot_chat_messages(
+                        session=session,
+                        envelope=envelope,
+                        persona=persona,
+                        request_id=request_id,
+                        target_id=target_id,
+                        sent_items=[(cleaned, out.onebot_message_id)],
+                        should_quote=False,
+                    )
                     return {
                         "handled": "voice_answer",
                         "request_id": request_id,
@@ -1117,6 +1152,7 @@ class CompanionPipeline:
         t_ob = time.perf_counter()
         deliveries = [filler_delivery] if filler_delivery else []
         sent_bubbles: list[str] = []
+        sent_bubble_records: list[tuple[str, str | None]] = []
         cancelled_stale = False
 
         for idx, bubble in enumerate(bubbles):
@@ -1144,8 +1180,18 @@ class CompanionPipeline:
             delivery.gatekeeper_action = decision.action
             delivery.trigger_msg_id = envelope.message_id
             delivery.feedback_status = "pending" if envelope.scene == "group" else "none"
-            deliveries.append({"id": delivery.id, "text": bubble, "status": delivery.status, "onebot_status": delivery.onebot_status})
-            sent_bubbles.append(bubble)
+            deliveries.append(
+                {
+                    "id": delivery.id,
+                    "text": bubble,
+                    "status": delivery.status,
+                    "onebot_status": delivery.onebot_status,
+                    "onebot_message_id": delivery.onebot_message_id,
+                }
+            )
+            if delivery.status == "sent":
+                sent_bubbles.append(bubble)
+                sent_bubble_records.append((bubble, delivery.onebot_message_id))
 
         receipt_statuses = {delivery["onebot_status"] for delivery in deliveries}
         text_status = next(
@@ -1172,33 +1218,23 @@ class CompanionPipeline:
                     asset.source_url or asset.file_path,
                 )
                 stk_out.request_id = request_id
+                stk_out.feedback_status = "none"
                 sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
 
-        bot_qq = envelope.self_qq or self.adapter.bot_qq
         if decision.action == "direct_pass":
             speaker_ident = await session.get(QQIdentity, envelope.sender_qq)
             if speaker_ident is not None:
                 speaker_ident.relationship_level = int(speaker_ident.relationship_level or 0) + 1
-        if bot_qq and sent_bubbles:
-            await self.identity_service.upsert_from_message(
-                session, qq_id=bot_qq, nickname=persona.bot_name, group_id=envelope.group_id, group_card=persona.bot_name
+        if sent_bubble_records:
+            await self._record_bot_chat_messages(
+                session=session,
+                envelope=envelope,
+                persona=persona,
+                request_id=request_id,
+                target_id=target_id,
+                sent_items=sent_bubble_records,
+                should_quote=should_quote,
             )
-            session.add(
-                ChatMessage(
-                    message_id=f"bot_{request_id}",
-                    scene=envelope.scene,
-                    group_id=envelope.group_id,
-                    sender_qq=bot_qq,
-                    sender_display_name=persona.bot_name,
-                    raw_text="\n".join(sent_bubbles),
-                    expanded_reply_text=f"{envelope.display_name}: {envelope.raw_text}" if should_quote else None,
-                    gatekeeper_decision="bot_reply",
-                    gatekeeper_score=1.0,
-                    is_recalled=False,
-                    is_ambient_only=False,
-                )
-            )
-            await session.flush()
             if envelope.scene == "group" and envelope.group_id is not None:
                 await self.store.record_group_bot_activity(
                     envelope.group_id,
@@ -1213,7 +1249,7 @@ class CompanionPipeline:
             "handled": decision.action,
             "request_id": request_id,
             "decision": decision.model_dump(),
-            "bubbles": sent_bubbles,
+            "bubbles": sent_bubbles or bubbles,
             "deliveries": deliveries,
             "filler": filler_text,
             "search_queries": search_queries,
@@ -1222,6 +1258,53 @@ class CompanionPipeline:
             "provider": completion.provider_name,
             "used_fallback": completion.used_fallback,
         }
+
+    async def _record_bot_chat_messages(
+        self,
+        session: AsyncSession,
+        envelope: MessageEnvelope,
+        persona: PersonaVersion,
+        request_id: str,
+        target_id: int | None,
+        sent_items: list[tuple[str, str | None]],
+        should_quote: bool,
+        fallback_suffix: str | None = None,
+    ) -> None:
+        """Persist each actually-sent bot bubble with its real gateway message_id and internal request_id."""
+        bot_qq = envelope.self_qq or self.adapter.bot_qq
+        if not bot_qq or not sent_items:
+            return
+        await self.identity_service.upsert_from_message(
+            session, qq_id=bot_qq, nickname=persona.bot_name, group_id=envelope.group_id, group_card=persona.bot_name
+        )
+        peer_qq = (target_id or envelope.sender_qq) if envelope.scene == "private" else None
+        for idx, (bubble_text, gateway_msg_id) in enumerate(sent_items):
+            if gateway_msg_id:
+                msg_id = str(gateway_msg_id)
+            elif fallback_suffix:
+                msg_id = f"bot_{request_id}_{fallback_suffix}"
+            elif len(sent_items) == 1:
+                msg_id = f"bot_{request_id}"
+            else:
+                msg_id = f"bot_{request_id}_{idx}"
+            session.add(
+                ChatMessage(
+                    message_id=msg_id,
+                    request_id=request_id,
+                    scene=envelope.scene,
+                    group_id=envelope.group_id,
+                    peer_qq=peer_qq,
+                    sender_qq=bot_qq,
+                    sender_display_name=persona.bot_name,
+                    raw_text=bubble_text,
+                    expanded_reply_text=f"{envelope.display_name}: {envelope.raw_text}" if (idx == 0 and should_quote) else None,
+                    gatekeeper_decision="bot_reply",
+                    gatekeeper_score=1.0,
+                    is_recalled=False,
+                    is_ambient_only=False,
+                )
+            )
+        await session.flush()
 
     def _schedule_background_image_caption(self, img_items: list[dict[str, Any]]) -> None:
         if self._session_factory is None or self.multimodal_service is None:

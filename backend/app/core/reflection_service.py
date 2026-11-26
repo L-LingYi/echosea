@@ -207,6 +207,7 @@ class ReflectionService:
                         OutboxDelivery.scene == "group",
                         OutboxDelivery.status == "sent",
                         OutboxDelivery.feedback_status == "pending",
+                        OutboxDelivery.gatekeeper_action.is_not(None),
                         OutboxDelivery.created_at <= cutoff,
                     )
                 )
@@ -231,6 +232,7 @@ class ReflectionService:
         stmt = select(OutboxDelivery).where(
             OutboxDelivery.scene == "group",
             OutboxDelivery.status == "sent",
+            OutboxDelivery.gatekeeper_action == "soft_entry",
             OutboxDelivery.created_at >= since,
             OutboxDelivery.feedback_status.in_(("engaged", "cold_drop", "rejected")),
         )
@@ -452,7 +454,13 @@ class ReflectionService:
             if changed:
                 dirty_idents.add(m.sender_qq)
 
-        # Merge LLM extracted clues respecting public/private track isolation
+        # Merge LLM extracted clues respecting strict public/private track isolation
+        group_sender_qqs = {
+            int(m.sender_qq) for m in msgs if m.scene == "group" and m.gatekeeper_decision != "bot_reply" and m.sender_qq
+        }
+        private_sender_qqs = {
+            int(m.sender_qq) for m in msgs if m.scene == "private" and m.gatekeeper_decision != "bot_reply" and m.sender_qq
+        }
         today_str = now_utc.date().isoformat()
         for item in llm_extracted.get("profile_clues", []):
             if not isinstance(item, dict):
@@ -460,7 +468,14 @@ class ReflectionService:
             qq = int(item.get("qq_id") or 0)
             if not qq or qq in bot_qqs:
                 continue
-            scene_val = str(item.get("scene") or "group")
+            scene_val = str(item.get("scene") or "").strip().lower()
+            if scene_val not in ("group", "private"):
+                # Never default untagged LLM clues into public_profile
+                continue
+            if scene_val == "group" and qq not in group_sender_qqs:
+                continue
+            if scene_val == "private" and qq not in private_sender_qqs:
+                continue
             track = "private" if scene_val == "private" else "public"
             strict_public = track == "public"
             ident, prof = await _get_track_profile(qq, track)
@@ -562,41 +577,85 @@ class ReflectionService:
     ) -> int:
         episodes_created = 0
         bot_qqs = {int(m.sender_qq) for m in msgs if m.gatekeeper_decision == "bot_reply" and m.sender_qq}
+        group_ids_in_msgs = sorted({int(m.group_id) for m in msgs if m.scene == "group" and m.group_id})
+        default_group_id = group_id or (group_ids_in_msgs[0] if len(group_ids_in_msgs) == 1 else None)
+        group_sender_qqs = {
+            int(m.sender_qq) for m in msgs if m.scene == "group" and m.gatekeeper_decision != "bot_reply" and m.sender_qq
+        }
+        private_sender_qqs = {
+            int(m.sender_qq) for m in msgs if m.scene == "private" and m.gatekeeper_decision != "bot_reply" and m.sender_qq
+        }
+
+        async def _add_episode(
+            *,
+            scope: str,
+            ep_group_id: int | None,
+            ep_qq_id: int | None,
+            title: str,
+            content: str,
+            importance: float,
+            is_anniversary: bool,
+        ) -> None:
+            emb = await self.model_hub.embed_text(session, f"{title} {content}")
+            session.add(
+                MemoryEpisode(
+                    scope=scope,
+                    group_id=ep_group_id,
+                    qq_id=ep_qq_id,
+                    title=title[:200],
+                    content=content,
+                    importance=importance,
+                    is_anniversary=is_anniversary,
+                    event_date=today_local,
+                    embedding_json=emb,
+                )
+            )
+
         for m in msgs:
             if m.gatekeeper_decision == "bot_reply" or m.sender_qq in bot_qqs:
                 continue
             if any(cue in m.raw_text for cue in ANNIVERSARY_CUES):
                 scope = "public_group" if m.scene == "group" else "private_dm"
-                session.add(
-                    MemoryEpisode(
-                        scope=scope,
-                        group_id=m.group_id,
-                        qq_id=m.sender_qq,
-                        title="互动纪念时刻",
-                        content=f"{m.sender_display_name}: {m.raw_text[:200]}",
-                        importance=0.85,
-                        is_anniversary=True,
-                        event_date=today_local,
-                    )
+                await _add_episode(
+                    scope=scope,
+                    ep_group_id=m.group_id if scope == "public_group" else None,
+                    ep_qq_id=m.sender_qq,
+                    title="互动纪念时刻",
+                    content=f"{m.sender_display_name}: {m.raw_text[:200]}",
+                    importance=0.85,
+                    is_anniversary=True,
                 )
                 episodes_created += 1
 
         for ep in llm_extracted.get("episodes", []):
+            if not isinstance(ep, dict):
+                continue
             content = str(ep.get("content", "")).strip()
             if not content:
                 continue
-            scope = "private_dm" if ep.get("scope") == "private_dm" else "public_group"
-            session.add(
-                MemoryEpisode(
-                    scope=scope,
-                    group_id=None if scope == "private_dm" else (ep.get("group_id") or group_id),
-                    qq_id=ep.get("qq_id"),
-                    title=str(ep.get("title", "共同经历"))[:200],
-                    content=content,
-                    importance=float(ep.get("importance", 0.7)),
-                    is_anniversary=bool(ep.get("is_anniversary", False)),
-                    event_date=today_local,
-                )
+            raw_scope = str(ep.get("scope") or "").strip().lower()
+            if raw_scope not in ("public_group", "private_dm"):
+                continue
+            ep_qq = int(ep["qq_id"]) if ep.get("qq_id") else None
+            if raw_scope == "private_dm":
+                if ep_qq is None or ep_qq not in private_sender_qqs:
+                    continue
+                ep_gid = None
+            else:
+                ep_gid = int(ep["group_id"]) if ep.get("group_id") else default_group_id
+                if ep_qq is not None and ep_qq not in group_sender_qqs:
+                    ep_qq = None
+                if ep_gid is None and ep_qq is None:
+                    # Unbound episode could never be recalled by assemble_context
+                    continue
+            await _add_episode(
+                scope=raw_scope,
+                ep_group_id=ep_gid,
+                ep_qq_id=ep_qq,
+                title=str(ep.get("title", "共同经历")),
+                content=content,
+                importance=float(ep.get("importance", 0.7)),
+                is_anniversary=bool(ep.get("is_anniversary", False)),
             )
             episodes_created += 1
         return episodes_created
@@ -746,32 +805,99 @@ class ReflectionService:
             created += 1
         return created
 
-    async def _try_llm_reflection(self, session: AsyncSession, msgs: list[ChatMessage]) -> dict[str, Any]:
+    @staticmethod
+    def _parse_llm_json(raw_text: str) -> dict[str, Any]:
+        """Parse JSON robustly even when wrapped in markdown code fences or prose."""
+        text = (raw_text or "").strip()
+        if not text:
+            return {}
+        fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+        if fence_match:
+            text = fence_match.group(1).strip()
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end > start:
+                parsed = json.loads(text[start : end + 1])
+                return parsed if isinstance(parsed, dict) else {}
+            raise
+
+    async def _run_scene_llm_reflection(
+        self,
+        session: AsyncSession,
+        scene: str,
+        scene_msgs: list[ChatMessage],
+    ) -> dict[str, Any]:
         transcript = "\n".join(
-            f"[{m.scene}][{m.group_id or 'DM'}][{m.sender_qq}]{m.sender_display_name}: {m.raw_text}"
-            for m in msgs[-60:]
-            if m.gatekeeper_decision != "bot_reply"
+            f"[{m.group_id or 'DM'}][QQ:{m.sender_qq}]{m.sender_display_name}: {m.raw_text}"
+            for m in scene_msgs[-60:]
+            if (m.raw_text or "").strip()
         )
         if not transcript.strip():
             return {}
-        prompt = (
-            "请从以下聊天记录提炼 JSON（注意区分 group 公开与 private 私聊，严禁把手机号/住址/工资等隐私写入公开线索）：\n"
-            '{"profile_clues":[{"qq_id":123,"scene":"group","category":"interests","value":"...","recent_state":"","ttl_days":10,"interaction_style":"","boundary":""}],'
-            '"slang_candidates":[{"group_id":123,"phrase":"..."}],'
-            '"episodes":[{"scope":"public_group","title":"...","content":"...","is_anniversary":false}],'
-            '"persona_advices":[{"title":"...","advice":"...","reason":"..."}]}\n\n'
-            + transcript
-        )
+        if scene == "group":
+            prompt = (
+                "请从以下【群聊】记录提炼纯 JSON（不要输出 markdown 代码块或额外解释；严禁写入手机号/住址/工资等隐私）：\n"
+                '{"profile_clues":[{"qq_id":123,"category":"interests","value":"...","recent_state":"","ttl_days":10,"interaction_style":"","boundary":""}],'
+                '"slang_candidates":[{"group_id":123,"phrase":"..."}],'
+                '"episodes":[{"group_id":123,"qq_id":123,"title":"...","content":"...","importance":0.7,"is_anniversary":false}],'
+                '"persona_advices":[{"title":"...","advice":"...","reason":"..."}]}\n\n'
+                + transcript
+            )
+        else:
+            prompt = (
+                "请从以下【私聊】记录提炼纯 JSON（不要输出 markdown 代码块或额外解释；仅提炼该用户的私聊画像线索与共同记忆事件）：\n"
+                '{"profile_clues":[{"qq_id":123,"category":"interests","value":"...","recent_state":"","ttl_days":10,"interaction_style":"","boundary":""}],'
+                '"episodes":[{"qq_id":123,"title":"...","content":"...","importance":0.7,"is_anniversary":false}]}\n\n'
+                + transcript
+            )
         try:
             res = await self.model_hub.chat_complete(
                 session,
                 slot="reflection",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
-                max_tokens=600,
+                max_tokens=1200,
                 source="reflection",
             )
-            return json.loads(res.content)
+            parsed = self._parse_llm_json(res.content)
         except Exception as exc:
-            logger.warning("Nightly reflection LLM extraction failed [%s]: %s", type(exc).__name__, exc)
+            logger.warning("Nightly reflection LLM extraction (%s) failed [%s]: %s", scene, type(exc).__name__, exc)
             return {}
+
+        # Programmatically stamp scene/scope from source messages (never trust LLM to label privacy scope)
+        for item in parsed.get("profile_clues") or []:
+            if isinstance(item, dict):
+                item["scene"] = scene
+        ep_scope = "public_group" if scene == "group" else "private_dm"
+        for ep in parsed.get("episodes") or []:
+            if isinstance(ep, dict):
+                ep["scope"] = ep_scope
+                if scene == "private":
+                    ep["group_id"] = None
+        if scene == "private":
+            parsed["slang_candidates"] = []
+            parsed["persona_advices"] = []
+        return parsed
+
+    async def _try_llm_reflection(self, session: AsyncSession, msgs: list[ChatMessage]) -> dict[str, Any]:
+        group_msgs = [m for m in msgs if m.scene == "group" and m.gatekeeper_decision != "bot_reply"]
+        private_msgs = [m for m in msgs if m.scene == "private" and m.gatekeeper_decision != "bot_reply"]
+        merged: dict[str, list[Any]] = {
+            "profile_clues": [],
+            "slang_candidates": [],
+            "episodes": [],
+            "persona_advices": [],
+        }
+        for scene, bucket in (("group", group_msgs), ("private", private_msgs)):
+            if not bucket:
+                continue
+            part = await self._run_scene_llm_reflection(session, scene, bucket)
+            for key in merged:
+                vals = part.get(key)
+                if isinstance(vals, list):
+                    merged[key].extend(vals)
+        return merged

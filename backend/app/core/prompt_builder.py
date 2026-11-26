@@ -134,6 +134,7 @@ def build_prompt_messages(
     vision_hints: list[str] | None = None,
     correction_hints: list[str] | None = None,
     mentioned_users: list[str] | None = None,
+    sticker_tags_hint: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Prompt Cache optimized layout:
     1. Static prefix (system prompt + identity + banned phrases + search tool policy) FIRST
@@ -148,6 +149,12 @@ def build_prompt_messages(
         "日常闲聊保持简短口语化（优先 3-15 字短句），没有好梗时不必硬抖机灵或使用「像……似的」「不知道的人还以为……」等比喻模板。",
         f"禁止使用的词句：{', '.join(persona.banned_phrases or [])}。",
     ]
+    if sticker_tags_hint:
+        sample_tag = sticker_tags_hint[0]
+        static_lines.append(
+            f"[斗图配图协议] 情绪到位、吐槽或玩梗适合配表情包时，可在句尾附一个轻量标签如 [表情:{sample_tag}]"
+            f"（每轮最多一个，克制使用，不必每条都发）；当前图库高频标签：{'、'.join(sticker_tags_hint[:8])}。"
+        )
     if enable_search_tools:
         if enable_webpage_fetch:
             tool_intro = "你拥有 web_search（联网搜索）和 fetch_webpage（读取网页正文）工具。"

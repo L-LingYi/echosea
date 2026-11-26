@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 from fastapi import WebSocket
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import ChatMessage, OutboxDelivery
@@ -93,31 +93,49 @@ class SnowLumaAdapter:
             return True
         return False
 
-    async def _send_http(self, action: str, params: dict[str, Any]) -> None:
+    async def _send_http(self, action: str, params: dict[str, Any]) -> str:
         headers = {"Authorization": f"Bearer {self.http_access_token or self.access_token}"}
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(f"{self.http_url}/{action}", headers=headers, json=params)
             response.raise_for_status()
             result = response.json()
-        if result.get("retcode") != 0 or (result.get("data") or {}).get("message_id") is None:
+        msg_id = (result.get("data") or {}).get("message_id")
+        if result.get("retcode") != 0 or msg_id is None:
             raise RuntimeError(f"SnowLuma rejected {action}: retcode={result.get('retcode')}")
-        logger.info("SnowLuma accepted %s: message_id=%s", action, result["data"]["message_id"])
+        msg_id_str = str(msg_id)
+        logger.info("SnowLuma accepted %s: message_id=%s", action, msg_id_str)
+        return msg_id_str
 
-    async def _send(self, action: str, params: dict[str, Any], echo: str) -> str:
+    async def _send_ws_and_wait(self, ws_sender: Callable[[str], Awaitable[Any]], frame: str, echo: str) -> tuple[str, str | None]:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending_echoes[echo] = fut
+        try:
+            await ws_sender(frame)
+            try:
+                ack = await asyncio.wait_for(fut, timeout=1.5)
+                msg_id = (ack.get("data") or {}).get("message_id")
+                if ack.get("retcode") == 0 and msg_id is not None:
+                    return "accepted", str(msg_id)
+                return "submitted", (str(msg_id) if msg_id is not None else None)
+            except asyncio.TimeoutError:
+                return "submitted", None
+        finally:
+            self._pending_echoes.pop(echo, None)
+
+    async def _send(self, action: str, params: dict[str, Any], echo: str) -> tuple[str, str | None]:
         frame = json.dumps({"action": action, "params": params, "echo": echo}, ensure_ascii=False)
         if self.http_url and self.http_access_token:
-            await self._send_http(action, params)
-            return "accepted"
+            msg_id = await self._send_http(action, params)
+            return "accepted", msg_id
         if self._reverse_ws is not None:
-            await self._reverse_ws.send_text(frame)
-            return "submitted"
+            return await self._send_ws_and_wait(self._reverse_ws.send_text, frame, echo)
         if self._forward_ws is not None:
-            await self._forward_ws.send(frame)
-            return "submitted"
+            return await self._send_ws_and_wait(self._forward_ws.send, frame, echo)
         if self.http_url.startswith(("http://", "https://")):
-            await self._send_http(action, params)
-            return "accepted"
-        return "unverified"
+            msg_id = await self._send_http(action, params)
+            return "accepted", msg_id
+        return "unverified", None
 
     async def normalize_event(
         self,
@@ -190,7 +208,11 @@ class SnowLumaAdapter:
         quoted_text: str | None = None
         quoted_sender_qq: int | None = None
         if reply_to_msg_id and session is not None:
-            scope = ChatMessage.group_id == group_id if msg_type == "group" else ChatMessage.sender_qq == sender_qq
+            scope = (
+                ChatMessage.group_id == group_id
+                if msg_type == "group"
+                else or_(ChatMessage.peer_qq == sender_qq, ChatMessage.sender_qq == sender_qq)
+            )
             stmt = select(ChatMessage).where(
                 ChatMessage.message_id == reply_to_msg_id,
                 ChatMessage.scene == msg_type,
@@ -254,7 +276,7 @@ class SnowLumaAdapter:
             else {"user_id": target_id, "message": segments}
         )
         try:
-            delivery.onebot_status = await self._send(action, params, echo)
+            delivery.onebot_status, delivery.onebot_message_id = await self._send(action, params, echo)
             delivery.status = "sent"
             delivery.sent_at = datetime.now(timezone.utc)
         except Exception as exc:
@@ -348,7 +370,7 @@ class SnowLumaAdapter:
             else {"user_id": target_id, "message": segments}
         )
         try:
-            delivery.onebot_status = await self._send(action, params, echo)
+            delivery.onebot_status, delivery.onebot_message_id = await self._send(action, params, echo)
             delivery.status = "sent"
             delivery.sent_at = datetime.now(timezone.utc)
         except Exception as exc:
@@ -386,7 +408,7 @@ class SnowLumaAdapter:
             else {"user_id": target_id, "message": segments}
         )
         try:
-            delivery.onebot_status = await self._send(action, params, echo)
+            delivery.onebot_status, delivery.onebot_message_id = await self._send(action, params, echo)
             delivery.status = "sent"
             delivery.sent_at = datetime.now(timezone.utc)
         except Exception as exc:

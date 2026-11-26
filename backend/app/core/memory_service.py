@@ -46,6 +46,7 @@ class MemoryService:
             message_id=envelope.message_id,
             scene=envelope.scene,
             group_id=envelope.group_id,
+            peer_qq=envelope.sender_qq if envelope.scene == "private" else None,
             sender_qq=envelope.sender_qq,
             sender_display_name=envelope.display_name,
             raw_text=envelope.raw_text,
@@ -284,7 +285,7 @@ class MemoryService:
                 select(ChatMessage)
                 .where(
                     ChatMessage.scene == "private",
-                    ChatMessage.sender_qq == sender_qq,
+                    or_(ChatMessage.peer_qq == sender_qq, ChatMessage.sender_qq == sender_qq),
                     ChatMessage.is_recalled.is_(False),
                 )
                 .order_by(ChatMessage.created_at.desc())
@@ -361,7 +362,7 @@ class MemoryService:
                         pg_fts_ranks[int(eid)] = float(rnk or 0.0)
                 except Exception:
                     pg_fts_ranks = {}
-            if dialect_name == "postgresql" and query_embedding and candidates:
+            if dialect_name == "postgresql" and query_embedding and len(query_embedding) == 1536 and candidates:
                 try:
                     vec_literal = "[" + ",".join(f"{float(v):.6f}" for v in query_embedding) + "]"
                     vec_sql = select(

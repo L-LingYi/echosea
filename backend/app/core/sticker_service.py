@@ -1,12 +1,15 @@
 """Sticker Auto-Learning, Perceptual Hash Dedup, Gallery Review, and Reply Tag Trigger."""
 from __future__ import annotations
 
+import json
 import logging
+import random
 import re
+import time
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import String, cast, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.multimodal_service import compute_dhash, deterministic_url_hash, hamming_distance
@@ -32,6 +35,52 @@ class StickerService:
         self.storage_dir = Path(storage_dir)
         self.auto_approve_threshold = auto_approve_threshold
         self._recent_group_sticker: dict[int, str] = {}  # group_id -> last seen phash
+        self._cached_top_tags: list[str] = []
+        self._cached_top_tags_at: float = 0.0
+
+    async def get_top_approved_tags(self, session: AsyncSession, limit: int = 8, ttl_seconds: float = 600.0) -> list[str]:
+        """Return top emotion tags among approved stickers, cached in memory to avoid per-turn DB load."""
+        now = time.monotonic()
+        if self._cached_top_tags and (now - self._cached_top_tags_at) < ttl_seconds:
+            return self._cached_top_tags[:limit]
+        bind = session.get_bind() if hasattr(session, "get_bind") else None
+        dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+        tags: list[str] = []
+        try:
+            if dialect_name == "postgresql":
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT tag FROM ("
+                            "  SELECT jsonb_array_elements_text(emotion_tags::jsonb) AS tag "
+                            "  FROM sticker_assets WHERE status = 'approved'"
+                            ") t GROUP BY tag ORDER BY count(*) DESC LIMIT :lim"
+                        ),
+                        {"lim": limit},
+                    )
+                ).all()
+                tags = [str(r[0]).strip() for r in rows if r and str(r[0]).strip()]
+            else:
+                from collections import Counter
+
+                raw_tags = (
+                    await session.execute(
+                        select(StickerAsset.emotion_tags).where(StickerAsset.status == "approved").limit(500)
+                    )
+                ).scalars().all()
+                counts: Counter[str] = Counter()
+                for tag_list in raw_tags:
+                    for t in (tag_list or []):
+                        t_str = str(t).strip()
+                        if t_str:
+                            counts[t_str] += 1
+                tags = [t for t, _ in counts.most_common(limit)]
+        except Exception as exc:
+            logger.debug("get_top_approved_tags failed: %s", exc)
+        if tags:
+            self._cached_top_tags = tags
+            self._cached_top_tags_at = now
+        return tags[:limit]
 
     async def observe_group_image(
         self,
@@ -48,13 +97,17 @@ class StickerService:
         if not computed_hash:
             raise ValueError("Either image_bytes or phash is required")
 
-        # Check exact or near-duplicate dHash (Hamming distance <= 4)
-        existing_rows = list((await session.execute(select(StickerAsset))).scalars().all())
-        match: StickerAsset | None = None
-        for row in existing_rows:
-            if row.phash == computed_hash or hamming_distance(row.phash, computed_hash) <= 4:
-                match = row
-                break
+        # 1. Fast O(1) exact dHash lookup via unique index before scanning near-duplicates
+        match: StickerAsset | None = (
+            await session.execute(select(StickerAsset).where(StickerAsset.phash == computed_hash).limit(1))
+        ).scalar_one_or_none()
+        if match is None:
+            # 2. Lightweight (id, phash)-only scan for Hamming distance <= 4 (avoids hydrating full ORM rows)
+            phash_rows = (await session.execute(select(StickerAsset.id, StickerAsset.phash))).all()
+            for row_id, row_phash in phash_rows:
+                if hamming_distance(row_phash, computed_hash) <= 4:
+                    match = await session.get(StickerAsset, row_id)
+                    break
 
         if match is not None:
             match.appearance_count += 1
@@ -149,19 +202,67 @@ class StickerService:
         return created
 
     async def pick_sticker_for_tag(self, session: AsyncSession, tag: str) -> StickerAsset | None:
-        """Select an approved sticker matching the requested emotion/context tag."""
-        stmt = (
-            select(StickerAsset)
-            .where(StickerAsset.status == "approved")
-            .order_by(StickerAsset.positive_reactions.desc(), StickerAsset.appearance_count.desc())
-        )
-        rows = list((await session.execute(stmt)).scalars().all())
-        tag_lower = tag.lower()
-        for row in rows:
-            tags = [str(t).lower() for t in (row.emotion_tags or [])]
-            if tag_lower in tags or tag_lower in (row.context_hint or "").lower():
-                return row
-        return rows[0] if rows else None
+        """Select an approved sticker matching the requested emotion/context tag via bounded DB query."""
+        clean_tag = (tag or "").strip()
+        if not clean_tag:
+            return None
+        bind = session.get_bind() if hasattr(session, "get_bind") else None
+        dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+        like_pat = f"%{clean_tag}%"
+
+        if dialect_name == "postgresql":
+            stmt = (
+                select(StickerAsset)
+                .where(
+                    StickerAsset.status == "approved",
+                    or_(
+                        text("emotion_tags::jsonb @> CAST(:tag_arr AS jsonb)").bindparams(
+                            tag_arr=json.dumps([clean_tag], ensure_ascii=False)
+                        ),
+                        StickerAsset.context_hint.ilike(like_pat),
+                    ),
+                )
+                .order_by(StickerAsset.positive_reactions.desc(), StickerAsset.appearance_count.desc())
+                .limit(20)
+            )
+            matched = list((await session.execute(stmt)).scalars().all())
+        else:
+            ascii_pat = f"%{json.dumps(clean_tag)}%"
+            stmt = (
+                select(StickerAsset)
+                .where(
+                    StickerAsset.status == "approved",
+                    or_(
+                        cast(StickerAsset.emotion_tags, String).ilike(like_pat),
+                        cast(StickerAsset.emotion_tags, String).ilike(ascii_pat),
+                        StickerAsset.context_hint.ilike(like_pat),
+                    ),
+                )
+                .order_by(StickerAsset.positive_reactions.desc(), StickerAsset.appearance_count.desc())
+                .limit(20)
+            )
+            candidates = list((await session.execute(stmt)).scalars().all())
+            tag_lower = clean_tag.lower()
+            matched = [
+                row
+                for row in candidates
+                if tag_lower in [str(t).lower() for t in (row.emotion_tags or [])]
+                or tag_lower in (row.context_hint or "").lower()
+            ]
+
+        if matched:
+            return random.choice(matched[: min(8, len(matched))])
+
+        if clean_tag.lower() in ("斗图", "fun", "general"):
+            fallback_stmt = (
+                select(StickerAsset)
+                .where(StickerAsset.status == "approved")
+                .order_by(StickerAsset.positive_reactions.desc(), StickerAsset.appearance_count.desc())
+                .limit(10)
+            )
+            fallback_rows = list((await session.execute(fallback_stmt)).scalars().all())
+            return random.choice(fallback_rows) if fallback_rows else None
+        return None
 
 
     async def auto_tag_with_context(
@@ -190,7 +291,11 @@ class StickerService:
                     max_tokens=160,
                     source="reflection",
                 )
-                parsed = _json.loads(res.content)
+                raw_out = (res.content or "").strip()
+                fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw_out, flags=re.DOTALL | re.IGNORECASE)
+                if fence:
+                    raw_out = fence.group(1).strip()
+                parsed = _json.loads(raw_out)
                 tags = [str(t).strip() for t in (parsed.get("emotion_tags") or []) if str(t).strip()][:5]
                 hint = str(parsed.get("context_hint") or "").strip()[:160]
                 if tags:

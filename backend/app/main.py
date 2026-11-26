@@ -112,7 +112,7 @@ def create_app(
         if db_mgr.engine.dialect.name == "postgresql":
             await db_mgr.apply_migration_files(
                 Path(__file__).resolve().parents[2] / "db",
-                ("migrations_v1_1.sql", "migrations_v1_2.sql", "migrations_v1_3.sql", "migrations_v1_4.sql"),
+                ("migrations_v1_1.sql", "migrations_v1_2.sql", "migrations_v1_3.sql", "migrations_v1_4.sql", "migrations_v1_5.sql"),
             )
         app.state.db_manager = db_mgr
 

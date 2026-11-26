@@ -5,6 +5,7 @@ and attach cleanly via PluginManager without touching core pipeline code.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import Any
 
 from app.core.event_bus import PluginEventBus
 from app.core.multimodal_service import resolve_image_phash
-from app.models.db import BackupRecord
+from app.models.db import BackupRecord, StickerAsset
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +38,30 @@ class AutoStickerReactionPlugin(CompanionPlugin):
     timeout_seconds = 5.0
 
     def register(self, bus: PluginEventBus, runtime: Any) -> None:
+        bg_tasks: set[asyncio.Task[Any]] = set()
+
+        async def _tag_asset_async(asset_id: int, surrounding: list[str]) -> None:
+            try:
+                async with runtime.db_manager.session_factory() as tag_session:
+                    asset = await tag_session.get(StickerAsset, asset_id)
+                    if asset is None:
+                        return
+                    await runtime.sticker_service.auto_tag_with_context(
+                        session=tag_session,
+                        asset=asset,
+                        surrounding_messages=surrounding,
+                        model_hub=getattr(runtime, "model_hub", None),
+                    )
+                    await tag_session.commit()
+            except Exception as exc:
+                logger.debug("Async sticker auto-tagging failed for asset %s: %s", asset_id, exc)
+
         async def _on_evaluated(payload: dict[str, Any]) -> None:
             env = payload.get("envelope") or {}
             if env.get("scene") != "group" or not env.get("group_id"):
                 return
             group_id = int(env["group_id"])
+            to_tag: list[tuple[int, list[str]]] = []
             async with runtime.db_manager.session_factory() as session:
                 media = env.get("media_meta") or []
                 from sqlalchemy import select as _sel
@@ -68,16 +88,17 @@ class AutoStickerReactionPlugin(CompanionPlugin):
                             source_url=str(item["url"]),
                             context_hint=str(env.get("raw_text") or ""),
                         )
-                        await runtime.sticker_service.auto_tag_with_context(
-                            session=session,
-                            asset=asset,
-                            surrounding_messages=surrounding,
-                            model_hub=getattr(runtime, "model_hub", None),
-                        )
+                        if asset.id is not None and (not asset.context_hint or asset.emotion_tags == ["fun"]):
+                            to_tag.append((asset.id, surrounding))
                 raw_text = str(env.get("raw_text") or "")
                 if raw_text:
                     await runtime.sticker_service.observe_group_reaction_text(session, group_id, raw_text)
                 await session.commit()
+
+            for asset_id, ctx_lines in to_tag:
+                task = asyncio.create_task(_tag_asset_async(asset_id, ctx_lines), name=f"sticker_tag_{asset_id}")
+                bg_tasks.add(task)
+                task.add_done_callback(bg_tasks.discard)
 
         bus.subscribe("on_message_evaluated", self.name, _on_evaluated, timeout_seconds=self.timeout_seconds)
 

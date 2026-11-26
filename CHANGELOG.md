@@ -1,5 +1,16 @@
 # 更新日志（Changelog）
 
+## v1.9.2 (2026-11-26)
+- **群聊/私聊引用回溯与私聊多轮连续性修复**：
+  - `SnowLumaAdapter` 捕获取消丢弃的网关真实 `message_id`（HTTP 回执与 WS Echo 均支持）并写入 `OutboxDelivery.onebot_message_id`；`CompanionPipeline` 按每个实际发送成功的气泡分别写入 `ChatMessage`（保留 `request_id` 关联整轮，同时覆盖搜索过渡语与语音回复），发送失败的气泡不再写入已发言记录。
+  - `ChatMessage` 新增 `peer_qq` 与 `request_id` 字段（含幂等迁移 `db/migrations_v1_5.sql`），修复私聊 L1 历史查询丢失机器人上一句及私聊引用机器人回复查不到原文的问题。
+- **门卫自学习口径修正与反思隔离/长期记忆修复**：
+  - `OutboxDelivery.feedback_status` 默认值改为 `none`，并在迁移中清理升级前缺少 `gatekeeper_action` 的历史挂起记录；`_finalize_cold_drops` 排除 `gatekeeper_action IS NULL`，`_tune_group_thresholds` 仅统计主动插话（`soft_entry`），避免 `direct_pass` 自然结束对话拉高主动接话门槛。
+  - 夜间反思改为群聊/私聊分场景独立提取，由程序强制写入 `scene`/`scope` 并校验来源发送者，杜绝私聊线索串入公开画像；增强反思 LLM 与表情打标 JSON 围栏剥离解析并提升 `max_tokens=1200`，为 `MemoryEpisode` 自动补齐 `group_id` 与语义向量 `embedding_json`（兼容非 1536 维向量检索）。
+- **表情包发图协议与收图性能优化**：
+  - 在 `prompt_builder.py` 公共静态区注入斗图语法与库内高频标签示例，解决自定义人设不触发发图问题。
+  - `StickerService.observe_group_image` 改为精确索引查重 + 轻量 `(id, phash)` 扫描，`pick_sticker_for_tag` 下推数据库有界匹配并移除无关标签盲目兜底；`AutoStickerReactionPlugin` 先提交入库再异步后台打标，消除 5 秒超时。
+
 ## v1.9.1 (2026-11-26)
 - **内存泄漏防护与连接池复用**：
   - `CompanionPipeline._get_group_lock()` 为 `_group_locks` / `_group_generations` / `_group_msg_counters` 增加 `2048` 容量上限，超出时自动淘汰最早的未加锁群组记录。

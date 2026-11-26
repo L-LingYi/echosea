@@ -62,14 +62,17 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
     __table_args__ = (
         Index("ix_chat_messages_scene_group_created", "scene", "group_id", "created_at"),
+        Index("ix_chat_messages_private_peer_created", "scene", "peer_qq", "created_at"),
         Index("ix_chat_messages_sender_created", "sender_qq", "created_at"),
         Index("ix_chat_messages_msg_id", "message_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     message_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     scene: Mapped[str] = mapped_column(String(16), nullable=False)  # group | private
     group_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    peer_qq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     sender_qq: Mapped[int] = mapped_column(BigInteger, ForeignKey("qq_identities.qq_id", ondelete="CASCADE"), nullable=False)
     sender_display_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     raw_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -206,7 +209,8 @@ class OutboxDelivery(Base):
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     onebot_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
     onebot_echo: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    feedback_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)  # pending | engaged | cold_drop | rejected | none
+    onebot_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    feedback_status: Mapped[str] = mapped_column(String(24), default="none", nullable=False)  # pending | engaged | cold_drop | rejected | none
     feedback_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     gatekeeper_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     trigger_msg_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
