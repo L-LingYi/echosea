@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,7 @@ from app.core.prompt_builder import (
     DEFAULT_BANNED_PHRASES,
     DEFAULT_SYSTEM_PROMPT,
     build_prompt_messages,
+    format_casual_bubbles,
     sanitize_anti_ai_flavor,
     split_natural_bubbles,
 )
@@ -92,6 +94,7 @@ __all__ = [
     "DEFAULT_BANNED_PHRASES",
     "DEFAULT_SYSTEM_PROMPT",
     "WEB_SEARCH_TOOLS",
+    "format_casual_bubbles",
     "sanitize_anti_ai_flavor",
     "split_natural_bubbles",
 ]
@@ -125,6 +128,11 @@ class CompanionPipeline:
         smart_quote_min_intervening: int = 3,
         smart_quote_min_delay_seconds: float = 25.0,
         debounce_window_seconds: float = 0.0,
+        debounce_max_wait_seconds: float = 6.0,
+        bubble_delay_min_seconds: float = 0.0,
+        bubble_delay_max_seconds: float = 0.0,
+        enable_background_image_caption: bool = True,
+        session_factory: Any = None,
     ) -> None:
         self.store = store
         self.identity_service = identity_service
@@ -150,9 +158,19 @@ class CompanionPipeline:
         self.smart_quote_min_intervening = smart_quote_min_intervening
         self.smart_quote_min_delay_seconds = smart_quote_min_delay_seconds
         self._debounce_window_seconds = max(0.0, float(debounce_window_seconds))
-        self.debouncer = MessageDebouncer(window_seconds=self._debounce_window_seconds or 1.5)
+        self.debouncer = MessageDebouncer(
+            window_seconds=self._debounce_window_seconds or 2.2,
+            max_wait_seconds=debounce_max_wait_seconds,
+        )
+        self.bubble_delay_min_seconds = max(0.0, float(bubble_delay_min_seconds))
+        self.bubble_delay_max_seconds = max(self.bubble_delay_min_seconds, float(bubble_delay_max_seconds))
+        self.enable_background_image_caption = bool(enable_background_image_caption)
+        self._session_factory = session_factory
         self._group_msg_counters: dict[int, int] = {}
         self._group_locks: dict[int, asyncio.Lock] = {}
+        self._group_generations: dict[int, int] = {}
+        self._bg_caption_sem = asyncio.Semaphore(1)
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
 
     build_prompt_messages = staticmethod(build_prompt_messages)
 
@@ -162,6 +180,26 @@ class CompanionPipeline:
             lock = asyncio.Lock()
             self._group_locks[group_id] = lock
         return lock
+
+    def _next_group_generation(self, group_id: int) -> int:
+        gen = self._group_generations.get(group_id, 0) + 1
+        self._group_generations[group_id] = gen
+        return gen
+
+    def _compute_bubble_delay(self, bubble_text: str) -> float:
+        if self.bubble_delay_max_seconds <= 0.0:
+            return 0.0
+        base = 0.55 + len(bubble_text.strip()) * 0.04 + random.uniform(0.0, 0.25)
+        return max(self.bubble_delay_min_seconds, min(self.bubble_delay_max_seconds, base))
+
+    async def drain_background_tasks(self, timeout: float = 3.0) -> None:
+        pending = [t for t in self._bg_tasks if not t.done()]
+        if pending:
+            _, still = await asyncio.wait(pending, timeout=max(0.1, timeout))
+            for t in still:
+                t.cancel()
+            if still:
+                await asyncio.gather(*still, return_exceptions=True)
 
     @staticmethod
     async def _trace(
@@ -302,6 +340,8 @@ class CompanionPipeline:
 
     async def enqueue_or_handle_raw_event(self, session_factory: Any, raw_event: dict[str, Any]) -> dict[str, Any]:
         """WebSocket ingress: handles recalls immediately and debounces non-direct group burst chatter."""
+        if self._session_factory is None:
+            self._session_factory = session_factory
         post_type = raw_event.get("post_type")
         if post_type == "notice" or self._debounce_window_seconds <= 0.0:
             async with session_factory() as s:
@@ -534,8 +574,22 @@ class CompanionPipeline:
         request_id: str | None = None,
     ) -> dict[str, Any]:
         if envelope.scene == "group" and envelope.group_id is not None:
+            my_gen = self._next_group_generation(envelope.group_id)
             async with self._get_group_lock(envelope.group_id):
-                return await self._process_envelope_locked(session, envelope, request_id=request_id)
+                res = await self._process_envelope_locked(
+                    session,
+                    envelope,
+                    request_id=request_id,
+                    defer_multi_bubble=True,
+                )
+            if isinstance(res, dict) and "_deferred_send" in res:
+                return await self._finalize_reply_delivery(
+                    session,
+                    res["_deferred_send"],
+                    group_id=envelope.group_id,
+                    generation_id=my_gen,
+                )
+            return res
         return await self._process_envelope_locked(session, envelope, request_id=request_id)
 
     async def _process_envelope_locked(
@@ -543,6 +597,7 @@ class CompanionPipeline:
         session: AsyncSession,
         envelope: MessageEnvelope,
         request_id: str | None = None,
+        defer_multi_bubble: bool = False,
     ) -> dict[str, Any]:
         request_id = request_id or f"req_{uuid.uuid4().hex[:12]}"
         session_scope = (
@@ -582,7 +637,12 @@ class CompanionPipeline:
             recent_lines: list[str] = []
             if env.scene == "group" and env.group_id is not None:
                 r_stmt = (
-                    select(ChatMessage.sender_display_name, ChatMessage.raw_text)
+                    select(
+                        ChatMessage.sender_display_name,
+                        ChatMessage.raw_text,
+                        ChatMessage.media_meta,
+                        ChatMessage.gatekeeper_decision,
+                    )
                     .where(
                         ChatMessage.scene == "group",
                         ChatMessage.group_id == env.group_id,
@@ -591,26 +651,57 @@ class CompanionPipeline:
                     .order_by(ChatMessage.id.desc())
                     .limit(5)
                 )
-                recent_lines = [f"{r[0]}: {r[1]}" for r in reversed((await session.execute(r_stmt)).all()) if r[1]]
+                recent_rows = list(reversed((await session.execute(r_stmt)).all()))
+                url_desc_map = await MultimodalService.resolve_media_hints_map(
+                    session, [r[2] for r in recent_rows]
+                )
+                for sender_name, raw_txt, m_meta, gk_dec in recent_rows:
+                    txt_part = (raw_txt or "").strip()
+                    media_part = MultimodalService.format_media_placeholder(m_meta, url_desc_map)
+                    combined = " ".join(p for p in (txt_part, media_part) if p)
+                    if not combined:
+                        continue
+                    prefix = f"我({persona.bot_name})" if gk_dec == "bot_reply" else sender_name
+                    recent_lines.append(f"{prefix}: {combined}")
+
             ctx_block = "\n".join(recent_lines) if recent_lines else "(none)"
+            latest_media = MultimodalService.format_media_placeholder(env.media_meta)
+            latest_msg_display = " ".join(p for p in ((env.raw_text or "").strip(), latest_media) if p)
             state_text = (
                 f"Bot name: {persona.bot_name} (aliases: {', '.join(persona.aliases or [])})\n"
                 f"Group: {env.group_id}\n"
                 f"Recent group context (oldest -> newest):\n{ctx_block}\n"
                 f"Latest sender: {env.display_name} (QQ:{env.sender_qq})\n"
                 f"Quoted: {env.expanded_reply_text or 'none'}\n"
-                f"Latest message: {env.raw_text}"
+                f"Latest message: {latest_msg_display}"
             )
-            att_age = await self.store.get_user_attention_age_seconds(env.group_id or 0, env.sender_qq) if env.scene == "group" else None
-            if att_age is not None:
-                state_text += f"\n[Active Attention Window] Bot replied to this user {int(att_age)}s ago; prefer continuing conversation unless clearly talking to someone else."
-            elif env.scene == "group" and env.group_id is not None:
-                group_bot_age = await self.store.get_group_bot_activity_age_seconds(env.group_id)
-                if group_bot_age is not None and group_bot_age <= self.gatekeeper.group_topic_warmth_seconds:
-                    state_text += (
-                        f"\n[Recent Group Bot Topic] Bot replied in this group {int(group_bot_age)}s ago; "
-                        "if this message riffs on or continues the bot's topic (and is not directed at another member), a brief chime-in is natural."
+            if env.scene == "group" and env.group_id is not None:
+                att_age = await self.store.get_user_attention_age_seconds(env.group_id, env.sender_qq)
+                att_meta = await self.store.get_user_attention_meta(env.group_id, env.sender_qq)
+                last_human = await self.store.get_last_group_human_message(env.group_id)
+                interrupted = bool(
+                    last_human
+                    and int(last_human.get("qq", 0)) != env.sender_qq
+                    and att_meta is not None
+                    and (
+                        int(last_human.get("seq", 0)) > int(att_meta.get("seq", 0))
+                        or float(last_human.get("ts", 0.0)) > float(att_meta.get("ts", 0.0))
                     )
+                )
+                if interrupted:
+                    state_text += (
+                        "\n[Third-Party Topic Interruption] Another group member spoke or posted media after this user's last bot interaction; "
+                        "verify carefully whether this message is replying to that member ('other_user') instead of the bot."
+                    )
+                elif att_age is not None:
+                    state_text += f"\n[Active Attention Window] Bot replied to this user {int(att_age)}s ago; prefer continuing conversation unless clearly talking to someone else."
+                else:
+                    group_bot_age = await self.store.get_group_bot_activity_age_seconds(env.group_id)
+                    if group_bot_age is not None and group_bot_age <= self.gatekeeper.group_topic_warmth_seconds:
+                        state_text += (
+                            f"\n[Recent Group Bot Topic] Bot replied in this group {int(group_bot_age)}s ago; "
+                            "if this message riffs on or continues the bot's topic (and is not directed at another member), a brief chime-in is natural."
+                        )
             return await self.model_hub.evaluate_gatekeeper_slot(
                 session=session,
                 state_text=state_text,
@@ -660,6 +751,21 @@ class CompanionPipeline:
                 if count >= self.ambient_summary_trigger_count:
                     self._group_msg_counters[envelope.group_id] = 0
                     await self.memory_service.build_ambient_summary(session, envelope.group_id)
+
+            if (
+                envelope.scene == "group"
+                and decision.action in ("silent", "soft_entry")
+                and not budget_fuse
+                and self.enable_background_image_caption
+                and self.multimodal_service is not None
+                and self._session_factory is not None
+            ):
+                img_items = [
+                    m for m in (envelope.media_meta or [])
+                    if isinstance(m, dict) and m.get("type") in ("image", "mface") and m.get("url")
+                ][:2]
+                if img_items:
+                    self._schedule_background_image_caption(img_items)
 
         self.event_bus.emit_background(
             "on_message_evaluated",
@@ -912,8 +1018,7 @@ class CompanionPipeline:
                         "provider": completion.provider_name,
                     }
 
-        # 11. Natural Bubble Splitting + Smart Buried-Only Quoting
-        t_ob = time.perf_counter()
+        # 11. Natural Bubble Splitting + Casual Punctuation Cleanup + Smart Buried-Only Quoting
         should_quote = False
         if envelope.scene == "group" and envelope.group_id is not None:
             should_quote = await self.should_quote_target(
@@ -923,9 +1028,70 @@ class CompanionPipeline:
                 elapsed_seconds=(time.perf_counter() - t_start),
                 after_filler=bool(filler_delivery),
             )
-        bubbles = split_natural_bubbles(cleaned, max_bubbles=int(cfg.get("max_bubbles", 3)))
+        raw_bubbles = split_natural_bubbles(cleaned, max_bubbles=int(cfg.get("max_bubbles", 3)))
+        bubbles = format_casual_bubbles(raw_bubbles, cleaned)
+        payload = {
+            "request_id": request_id,
+            "envelope": envelope,
+            "decision": decision,
+            "persona": persona,
+            "target_id": target_id,
+            "should_quote": should_quote,
+            "bubbles": bubbles,
+            "filler_delivery": filler_delivery,
+            "filler_text": filler_text,
+            "search_queries": search_queries,
+            "sticker_tags": sticker_tags,
+            "completion": completion,
+        }
+        if (
+            defer_multi_bubble
+            and len(bubbles) > 1
+            and self.bubble_delay_max_seconds > 0.0
+            and envelope.scene == "group"
+            and envelope.group_id is not None
+        ):
+            return {"_deferred_send": payload}
+        return await self._finalize_reply_delivery(session, payload)
+
+    async def _finalize_reply_delivery(
+        self,
+        session: AsyncSession,
+        payload: dict[str, Any],
+        group_id: int | None = None,
+        generation_id: int | None = None,
+    ) -> dict[str, Any]:
+        request_id: str = payload["request_id"]
+        envelope: MessageEnvelope = payload["envelope"]
+        decision: GatekeeperDecision = payload["decision"]
+        persona: PersonaVersion = payload["persona"]
+        target_id: int | None = payload["target_id"]
+        should_quote: bool = payload["should_quote"]
+        bubbles: list[str] = payload["bubbles"]
+        filler_delivery: dict[str, Any] | None = payload["filler_delivery"]
+        filler_text: str | None = payload["filler_text"]
+        search_queries: list[str] = payload["search_queries"]
+        sticker_tags: list[str] = payload["sticker_tags"]
+        completion = payload["completion"]
+
+        t_ob = time.perf_counter()
         deliveries = [filler_delivery] if filler_delivery else []
+        sent_bubbles: list[str] = []
+        cancelled_stale = False
+
         for idx, bubble in enumerate(bubbles):
+            if generation_id is not None and group_id is not None:
+                if idx > 0:
+                    delay = self._compute_bubble_delay(bubble)
+                    if delay > 0.0:
+                        await asyncio.sleep(delay)
+                if self._group_generations.get(group_id) != generation_id:
+                    cancelled_stale = True
+                    break
+                if await self.store.is_recalled(envelope.message_id):
+                    cancelled_stale = True
+                    break
+
             reply_id = envelope.message_id if (idx == 0 and should_quote) else None
             delivery = await self.adapter.send_message(
                 session=session,
@@ -939,6 +1105,7 @@ class CompanionPipeline:
             delivery.trigger_msg_id = envelope.message_id
             delivery.feedback_status = "pending" if envelope.scene == "group" else "none"
             deliveries.append({"id": delivery.id, "text": bubble, "status": delivery.status, "onebot_status": delivery.onebot_status})
+            sent_bubbles.append(bubble)
 
         receipt_statuses = {delivery["onebot_status"] for delivery in deliveries}
         text_status = next(
@@ -949,11 +1116,13 @@ class CompanionPipeline:
             session, request_id, envelope.scene, envelope.group_id, "onebot",
             text_status,
             latency_ms=int((time.perf_counter() - t_ob) * 1000),
-            meta={"bubbles": len(deliveries)},
+            meta={"bubbles": len(deliveries), "cancelled_stale": cancelled_stale},
         )
+        if not sent_bubbles and cancelled_stale:
+            return {"handled": "aborted_stale_generation", "request_id": request_id, "decision": decision.model_dump()}
 
         sent_sticker = None
-        if sticker_tags and self.sticker_service is not None:
+        if not cancelled_stale and sticker_tags and self.sticker_service is not None:
             asset = await self.sticker_service.pick_sticker_for_tag(session, sticker_tags[0])
             if asset and (asset.source_url or asset.file_path):
                 stk_out = await self.adapter.send_sticker(
@@ -970,7 +1139,7 @@ class CompanionPipeline:
             speaker_ident = await session.get(QQIdentity, envelope.sender_qq)
             if speaker_ident is not None:
                 speaker_ident.relationship_level = int(speaker_ident.relationship_level or 0) + 1
-        if bot_qq and bubbles:
+        if bot_qq and sent_bubbles:
             await self.identity_service.upsert_from_message(
                 session, qq_id=bot_qq, nickname=persona.bot_name, group_id=envelope.group_id, group_card=persona.bot_name
             )
@@ -981,7 +1150,7 @@ class CompanionPipeline:
                     group_id=envelope.group_id,
                     sender_qq=bot_qq,
                     sender_display_name=persona.bot_name,
-                    raw_text=" ".join(bubbles),
+                    raw_text="\n".join(sent_bubbles),
                     expanded_reply_text=f"{envelope.display_name}: {envelope.raw_text}" if should_quote else None,
                     gatekeeper_decision="bot_reply",
                     gatekeeper_score=1.0,
@@ -998,20 +1167,97 @@ class CompanionPipeline:
 
         await self.event_bus.emit(
             "on_reply_sent",
-            {"request_id": request_id, "scene": envelope.scene, "target_id": target_id, "bubbles": bubbles, "sticker": sent_sticker},
+            {"request_id": request_id, "scene": envelope.scene, "target_id": target_id, "bubbles": sent_bubbles, "sticker": sent_sticker},
         )
         return {
             "handled": decision.action,
             "request_id": request_id,
             "decision": decision.model_dump(),
-            "bubbles": bubbles,
+            "bubbles": sent_bubbles,
             "deliveries": deliveries,
             "filler": filler_text,
             "search_queries": search_queries,
             "sticker": sent_sticker,
+            "cancelled_stale": cancelled_stale,
             "provider": completion.provider_name,
             "used_fallback": completion.used_fallback,
         }
+
+    def _schedule_background_image_caption(self, img_items: list[dict[str, Any]]) -> None:
+        if self._session_factory is None or self.multimodal_service is None:
+            return
+        task = asyncio.create_task(self.caption_image_items(img_items), name="bg_image_caption")
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def caption_image_items(
+        self,
+        img_items: list[dict[str, Any]],
+        session: AsyncSession | None = None,
+    ) -> int:
+        """Download and generate concise 15-30 char captions into ImageVisionCache (dHash deduped)."""
+        if self.multimodal_service is None:
+            return 0
+        if session is None and self._session_factory is None:
+            return 0
+
+        async def _run(s: AsyncSession) -> int:
+            fetcher = getattr(self.multimodal_service, "image_fetcher", None)
+            captioned = 0
+            for item in img_items[:2]:
+                url = str(item.get("url") or "").strip()
+                if not url:
+                    continue
+                existing = (
+                    await s.execute(select(ImageVisionCache).where(ImageVisionCache.source_url == url).limit(1))
+                ).scalar_one_or_none()
+                if existing is not None and existing.description:
+                    continue
+                _, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
+                if img_bytes is None:
+                    continue
+                prep = await self.multimodal_service.lookup_or_prepare(
+                    s, img_bytes, source_url=url, is_gif=url.lower().endswith(".gif")
+                )
+                if prep.get("cache_hit") and prep.get("description"):
+                    continue
+                block = prep.get("content_block")
+                if not block:
+                    continue
+                try:
+                    comp = await self.model_hub.chat_complete(
+                        session=s,
+                        slot="main_brain",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "你是图片摘要助手。用15-30字客观概括图片内容（如游戏界面、聊天截图、表情包等），只输出一句话摘要，不要多余解释。",
+                            },
+                            {"role": "user", "content": [block]},
+                        ],
+                        temperature=0.2,
+                        max_tokens=60,
+                        source="vision_caption",
+                    )
+                    summary = (comp.content or "").strip().splitlines()[0][:80]
+                    if summary:
+                        await self.multimodal_service.save_vision_description(s, str(prep["phash"]), summary)
+                        captioned += 1
+                except Exception as exc:
+                    logger.debug("Background image caption failed for %s: %s", url, exc)
+            return captioned
+
+        async with self._bg_caption_sem:
+            try:
+                if session is not None:
+                    return await _run(session)
+                async with self._session_factory() as bg_session:
+                    count = await _run(bg_session)
+                    await bg_session.commit()
+                    return count
+            except Exception as exc:
+                logger.debug("Background image caption task failed: %s", exc)
+                return 0
 
     @staticmethod
     def _gatekeeper_reason_code(decision: GatekeeperDecision) -> str:

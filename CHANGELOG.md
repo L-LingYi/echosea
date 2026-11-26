@@ -1,5 +1,14 @@
 # 更新日志（Changelog）
 
+## v1.9.0 (2026-11-26)
+- **群聊拟人化与短链路体验综合修复**：
+  - **门卫话题打断衰减与上下文防盲**：`GatekeeperService` 新增同群第三方发言打断检测（`group_last_human`），当热聊窗口（0–60 秒）内有第三方群友发问、发图或引用别人后，自动撤销/惩罚 `0.35` 低门槛并向门卫注入 `[Third-Party Topic Interruption]` 提示；当门卫判定 `other_user` 时同步清理过期个人关注窗口，减少误插话。
+  - **异步图片摘要与门卫/L1 图片可见性**：`_gatekeeper_model_scorer` 与 `MemoryService.assemble_context` 不再丢弃纯图片消息，统一通过 `ImageVisionCache` 批量解析 `[图片: 摘要]` 或 `[图片]` 占位；支持群聊静默图片在后台单并发（`Semaphore(1)` + `dHash` 去重）异步生成 15–30 字极简摘要并反写缓存，守住 2GB 节点内存与 Token 预算。
+  - **锁外拟人拆泡延迟与 `generation_id` 在途取消**：`MessageDebouncer` 默认窗口调优至 `2.2s` 并新增 `max_wait_seconds=6.0` 上限；主脑多泡发送移至群锁外执行并支持 `0.8–1.8s` 动态打字延迟，期间若同群新消息到来或原消息撤回，通过递增 `generation_id` 立即取消剩余过期泡泡。
+  - **去 AI 味、自指锚点与 L1 拆泡原样留档**：主脑静态前缀与默认人设明确禁止脱口秀比喻模板并允许 3–15 字平淡短回，写死「AI/机器人/本名即本人、回复当前发言人统一用“你”」自指锚点；新增带白名单（保护 URL、代码块、列表与 >80 字长回复）的 `format_casual_bubbles()` 去除闲聊句尾句号与外层引号；Bot 回复写入 `ChatMessage` 时改用 `"\n".join(sent_bubbles)` 保留分泡换行，并在 L1 上下文以 `[我(bot_name)]` 逐泡展示。
+- **受控自我演化、4D 画像与记忆代谢**：
+  - 接入 4D 熟人画像结构化契约（`profile_schema`）、群聊隐式社交反馈回填（`engaged`/`rejected` 自动强化 L3 记忆或生成 48h 表达自纠偏提示）、L3 低价值记忆代谢归档，以及意识海修复（过滤 Bot 自身账号出现在群友图谱与身份列表）。
+
 ## v1.8.1 (2026-11-26)
 - **在线更新检查与三级自动化更新体系**：
   - 修复 `UpdateService.check_for_updates()` 在 GitHub Release 接口返回 404 回退至 `main` 分支提交时调用未定义 `logger` 导致后台返回 HTTP 500 的缺陷，并补充当容器未注入 `APP_GIT_COMMIT` 时自动向宿主机代理 `/check` 查询当前提交的兜底。

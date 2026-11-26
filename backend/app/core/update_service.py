@@ -1,4 +1,4 @@
-"""Industry-Standard Online Update Service (v1.8.1):
+"""Industry-Standard Online Update Service (v1.9.0):
 - Privilege separation: companion-core NEVER touches docker.sock; communicates with a loopback host updater
   daemon using HMAC-SHA256 signed requests + 60s anti-replay timestamps.
 - Supports BOTH current local repo mode and GitHub public repo mode (`UPDATE_GITHUB_REPO=owner/repo`).

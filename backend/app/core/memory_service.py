@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.multimodal_service import MultimodalService
 from app.core.profile_schema import normalize_profile, relationship_tier
 from app.models.db import (
     AmbientSummary,
@@ -431,14 +432,20 @@ class MemoryService:
             else {"energy_level": 80, "mood": "relaxed", "current_activity": "摸鱼看群", "diary_entry": ""}
         )
 
+        url_desc_map = await MultimodalService.resolve_media_hints_map(
+            session, [m.media_meta for m in l1_msgs]
+        )
+
         return {
             "l1_working": [
                 {
                     "sender_qq": m.sender_qq,
                     "sender": m.sender_display_name,
                     "text": m.raw_text,
+                    "media_hint": MultimodalService.format_media_placeholder(m.media_meta, url_desc_map),
                     "reply_to": m.expanded_reply_text,
                     "is_ambient_only": m.is_ambient_only,
+                    "is_bot": (m.gatekeeper_decision == "bot_reply"),
                 }
                 for m in l1_msgs
             ],

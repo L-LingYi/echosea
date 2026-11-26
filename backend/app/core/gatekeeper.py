@@ -125,6 +125,15 @@ class GatekeeperService:
         group_id = envelope.group_id or 0
         text = (envelope.raw_text or "").strip()
         all_names = [n.strip() for n in [bot_name, *aliases] if n and n.strip()]
+        has_media_image = any(
+            isinstance(m, dict) and m.get("type") in ("image", "mface")
+            for m in (envelope.media_meta or [])
+        )
+        has_topic_hook = bool(
+            has_media_image
+            or (envelope.reply_to_msg_id and not replied_to_bot)
+            or any(c in text for c in ("?", "？", "吗", "啥", "哪个", "谁", "怎么"))
+        )
 
         # --- Layer 1: Hard Rules (@, Reply, Peer Tracking) ---
         bot_mentioned = envelope.self_qq > 0 and envelope.self_qq in envelope.mentioned_qqs
@@ -135,6 +144,7 @@ class GatekeeperService:
             await self.store.clear_user_attention(group_id, envelope.sender_qq)
             for peer_qq in other_mentioned:
                 await self.store.record_peer_interaction(group_id, envelope.sender_qq, peer_qq)
+            await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=True)
             return GatekeeperDecision(
                 action="silent",
                 target="other_user",
@@ -147,6 +157,7 @@ class GatekeeperService:
         if bot_mentioned or replied_to_bot:
             await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
             await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
+            await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=False)
             await self.store.record_bot_turn(group_id, reset=True)
             return GatekeeperDecision(
                 action="direct_pass",
@@ -167,6 +178,7 @@ class GatekeeperService:
                     reason="Budget fuse active: admin override allowed",
                     should_record_ambient=True,
                 )
+            await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=has_topic_hook)
             return GatekeeperDecision(
                 action="silent",
                 target="group_open",
@@ -181,6 +193,7 @@ class GatekeeperService:
             if self._is_direct_call(text, matched_alias):
                 await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
                 await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
+                await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=False)
                 await self.store.record_bot_turn(group_id, reset=True)
                 return GatekeeperDecision(
                     action="direct_pass",
@@ -191,6 +204,7 @@ class GatekeeperService:
                     suggested_max_chars=160,
                 )
             # Third-person mention about bot -> downweighted soft-entry candidate
+            await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=has_topic_hook)
             return await self._evaluate_soft_entry(
                 envelope=envelope,
                 target="third_person_about_bot",
@@ -202,6 +216,7 @@ class GatekeeperService:
         # --- Layer 3: Active Peer-to-Peer Thread Guard & Air Guardrail ---
         active_peer = await self.store.get_active_peer(group_id, envelope.sender_qq)
         if active_peer and active_peer != envelope.self_qq:
+            await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=True)
             return GatekeeperDecision(
                 action="silent",
                 target="other_user",
@@ -211,24 +226,48 @@ class GatekeeperService:
             )
 
         # Time-Decaying Per-User Attention Window (0-60s hot -> 60-240s linear decay)
+        # Check whether a third party interrupted after this user's last bot interaction
+        last_human = await self.store.get_last_group_human_message(group_id)
         attention_age = await self.store.get_user_attention_age_seconds(group_id, envelope.sender_qq)
+        attention_meta = await self.store.get_user_attention_meta(group_id, envelope.sender_qq)
+        await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=has_topic_hook)
+
         if attention_age is not None and attention_age <= self.attention_decay_seconds:
             # Explicit goodbye or replying to someone else clears attention immediately
             if any(cue in text for cue in GOODBYE_CUES) or (envelope.reply_to_msg_id and not replied_to_bot):
                 await self.store.clear_user_attention(group_id, envelope.sender_qq)
             else:
+                base_thr = self.soft_entry_threshold if soft_entry_threshold is None else soft_entry_threshold
                 eff_threshold = self.compute_attention_threshold(attention_age, soft_entry_threshold=soft_entry_threshold)
-                # In hot window (<=60s) with no external gatekeeper LLM, allow smooth direct follow-up
                 base = 0.72 if attention_age <= self.attention_hot_seconds else 0.50
+                interrupted_by_other = bool(
+                    last_human
+                    and int(last_human.get("qq", 0)) != envelope.sender_qq
+                    and attention_meta is not None
+                    and (
+                        int(last_human.get("seq", 0)) > int(attention_meta.get("seq", 0))
+                        or float(last_human.get("ts", 0.0)) > float(attention_meta.get("ts", 0.0))
+                    )
+                )
+                if interrupted_by_other:
+                    if last_human.get("has_hook"):
+                        # Third party asked a question, sent an image, or replied to someone -> revoke hot discount
+                        eff_threshold = base_thr
+                        base = 0.35
+                    else:
+                        eff_threshold = min(base_thr, round(eff_threshold + 0.25, 3))
+                        base = 0.45
+
                 decision = await self._evaluate_soft_entry(
                     envelope=envelope,
-                    target="bot" if attention_age <= self.attention_hot_seconds else "group_open",
+                    target="bot" if (attention_age <= self.attention_hot_seconds and not interrupted_by_other) else "group_open",
                     base_score=base,
                     llm_scorer=llm_scorer,
                     threshold_override=eff_threshold,
                     default_threshold=soft_entry_threshold,
                     attention_age_seconds=attention_age,
                     in_attention_window=True,
+                    interrupted_by_other=interrupted_by_other,
                 )
                 if decision.action in ("direct_pass", "soft_entry"):
                     await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
@@ -296,6 +335,7 @@ class GatekeeperService:
         attention_age_seconds: float | None = None,
         in_attention_window: bool = False,
         group_warmth_age_seconds: float | None = None,
+        interrupted_by_other: bool = False,
     ) -> GatekeeperDecision:
         group_id = envelope.group_id or 0
         consecutive_turns = await self.store.get_consecutive_bot_turns(group_id)
@@ -326,6 +366,8 @@ class GatekeeperService:
                     score = max(0.0, min(1.0, float(llm_result["score"])))
                     reason = str(llm_result.get("reason", "Gatekeeper LLM decision"))
                     if llm_result.get("target") == "other_user":
+                        if in_attention_window:
+                            await self.store.clear_user_attention(group_id, envelope.sender_qq)
                         return GatekeeperDecision(
                             action="silent",
                             target="other_user",
@@ -346,6 +388,8 @@ class GatekeeperService:
         tags: list[str] = []
         if attention_age_seconds is not None:
             tags.append(f"attention={int(attention_age_seconds)}s")
+        if interrupted_by_other:
+            tags.append("interrupted")
         if group_warmth_age_seconds is not None:
             tags.append(f"warmth={int(group_warmth_age_seconds)}s")
         if in_attention_window and consecutive_turns >= self.max_consecutive_turns:

@@ -197,3 +197,48 @@ class MultimodalService:
             row.description = description.strip()
             row.last_used_at = datetime.now(timezone.utc)
             await session.flush()
+
+    @staticmethod
+    async def resolve_media_hints_map(
+        session: AsyncSession,
+        media_lists: list[list[dict[str, Any]] | None],
+    ) -> dict[str, str]:
+        """Batch-lookup cached vision descriptions by source_url for L1/Gatekeeper history."""
+        urls: list[str] = []
+        for items in media_lists:
+            for m in items or []:
+                if isinstance(m, dict) and m.get("type") in ("image", "mface") and m.get("url"):
+                    urls.append(str(m["url"]))
+        if not urls:
+            return {}
+        unique_urls = list(dict.fromkeys(urls))
+        rows = (
+            await session.execute(
+                select(ImageVisionCache.source_url, ImageVisionCache.description).where(
+                    ImageVisionCache.source_url.in_(unique_urls)
+                )
+            )
+        ).all()
+        return {str(u): str(d).strip() for u, d in rows if u and d and str(d).strip()}
+
+    @staticmethod
+    def format_media_placeholder(
+        media_meta: list[dict[str, Any]] | None,
+        url_desc_map: dict[str, str] | None = None,
+    ) -> str:
+        """Render media_meta into concise text tags like '[图片: 某手游截图]' or '[图片]'."""
+        if not media_meta:
+            return ""
+        parts: list[str] = []
+        desc_map = url_desc_map or {}
+        for m in media_meta[:3]:
+            if not isinstance(m, dict):
+                continue
+            mtype = m.get("type")
+            if mtype in ("image", "mface"):
+                url = str(m.get("url") or "")
+                desc = desc_map.get(url, "").strip()
+                parts.append(f"[图片: {desc[:48]}]" if desc else ("[表情包]" if mtype == "mface" else "[图片]"))
+            elif mtype == "face":
+                parts.append("[QQ表情]")
+        return " ".join(parts)

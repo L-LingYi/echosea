@@ -154,10 +154,12 @@ class StateStore:
     async def record_user_attention(
         self, group_id: int, user_qq: int, ttl_seconds: int = 260
     ) -> None:
-        """Refresh per-user focused attention timestamp after bot interacts with this user."""
+        """Refresh per-user focused attention timestamp and monotonic sequence after bot interacts with this user."""
+        seq = getattr(self, "_event_seq", 0) + 1
+        self._event_seq = seq
         await self.set_json(
             f"attention:{group_id}:{user_qq}",
-            {"ts": time.time()},
+            {"ts": time.time(), "seq": seq},
             ttl_seconds=ttl_seconds,
         )
 
@@ -169,6 +171,30 @@ class StateStore:
         if data and isinstance(data, dict) and "ts" in data:
             return max(0.0, time.time() - float(data["ts"]))
         return None
+
+    async def get_user_attention_meta(self, group_id: int, user_qq: int) -> dict[str, Any] | None:
+        data = await self.get_json(f"attention:{group_id}:{user_qq}")
+        return data if isinstance(data, dict) else None
+
+    async def record_group_human_message(
+        self,
+        group_id: int,
+        sender_qq: int,
+        has_hook: bool = False,
+        ttl_seconds: int = 300,
+    ) -> None:
+        """Track the latest human speaker in a group to detect third-party topic interruptions."""
+        seq = getattr(self, "_event_seq", 0) + 1
+        self._event_seq = seq
+        await self.set_json(
+            f"group_last_human:{group_id}",
+            {"qq": int(sender_qq), "ts": time.time(), "seq": seq, "has_hook": bool(has_hook)},
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def get_last_group_human_message(self, group_id: int) -> dict[str, Any] | None:
+        data = await self.get_json(f"group_last_human:{group_id}")
+        return data if isinstance(data, dict) else None
 
     async def record_group_bot_activity(self, group_id: int, ttl_seconds: int = 210) -> None:
         """Refresh group-wide recent bot reply timestamp for multi-user topic continuity."""
@@ -200,12 +226,19 @@ class StateStore:
 
 
 class MessageDebouncer:
-    """1.5-2.5s debounce window per (scene, group_id, sender_qq) to merge burst messages."""
+    """2.0-2.5s debounce window per (scene, group_id, sender_qq) with max_wait cap to merge burst messages."""
 
-    def __init__(self, window_seconds: float = 1.5, max_batch_size: int = 8) -> None:
+    def __init__(
+        self,
+        window_seconds: float = 2.2,
+        max_batch_size: int = 8,
+        max_wait_seconds: float = 6.0,
+    ) -> None:
         self.window_seconds = window_seconds
         self.max_batch_size = max(1, max_batch_size)
+        self.max_wait_seconds = max(0.1, float(max_wait_seconds))
         self._buffers: dict[str, list[Any]] = defaultdict(list)
+        self._first_push_ts: dict[str, float] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._in_flight: set[asyncio.Task[None]] = set()
 
@@ -214,6 +247,8 @@ class MessageDebouncer:
             await callback(batch)
 
     async def push(self, key: str, item: Any, callback: Any) -> None:
+        now = time.monotonic()
+        first_ts = self._first_push_ts.setdefault(key, now)
         self._buffers[key].append(item)
         existing = self._tasks.pop(key, None)
         if existing and not existing.done():
@@ -221,15 +256,20 @@ class MessageDebouncer:
 
         if len(self._buffers[key]) >= self.max_batch_size:
             batch = self._buffers.pop(key, [])
+            self._first_push_ts.pop(key, None)
             task = asyncio.create_task(self._dispatch_batch(batch, callback), name=f"debounce_flush_cap:{key}")
             self._in_flight.add(task)
             task.add_done_callback(self._in_flight.discard)
             return
 
+        remaining_cap = max(0.05, self.max_wait_seconds - (now - first_ts))
+        delay = min(self.window_seconds, remaining_cap)
+
         async def _flush() -> None:
             try:
-                await asyncio.sleep(self.window_seconds)
+                await asyncio.sleep(delay)
                 batch = self._buffers.pop(key, [])
+                self._first_push_ts.pop(key, None)
                 self._tasks.pop(key, None)
                 await self._dispatch_batch(batch, callback)
             except asyncio.CancelledError:
@@ -243,6 +283,7 @@ class MessageDebouncer:
         existing = self._tasks.pop(key, None)
         if existing and not existing.done():
             existing.cancel()
+        self._first_push_ts.pop(key, None)
         batch = self._buffers.pop(key, [])
         if batch and callback is not None:
             await callback(batch)
@@ -262,6 +303,7 @@ class MessageDebouncer:
             removed += before - len(self._buffers[key])
             if not self._buffers[key]:
                 self._buffers.pop(key, None)
+                self._first_push_ts.pop(key, None)
                 t = self._tasks.pop(key, None)
                 if t and not t.done():
                     t.cancel()
@@ -274,6 +316,7 @@ class MessageDebouncer:
                 t.cancel()
         self._tasks.clear()
         self._buffers.clear()
+        self._first_push_ts.clear()
         pending = [t for t in self._in_flight if not t.done()]
         if pending:
             _, still = await asyncio.wait(pending, timeout=max(0.1, timeout))

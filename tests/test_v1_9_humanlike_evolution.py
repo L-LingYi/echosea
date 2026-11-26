@@ -539,3 +539,336 @@ def test_v190_webui_apis_4d_identity_edit_and_suggestion_review():
         graph = client.get("/api/memory/graph", headers=headers).json()
         assert all(n["id"] != "qq_2164459727" for n in graph["nodes"])
         assert any(n["id"] == "group_486135657" for n in graph["nodes"])
+
+
+@pytest.mark.asyncio
+async def test_v190_gatekeeper_interruption_decay_and_other_user_clears_attention(state_store):
+    gk = GatekeeperService(
+        store=state_store,
+        soft_entry_threshold=0.78,
+        attention_hot_seconds=60.0,
+        attention_decay_seconds=240.0,
+    )
+
+    # 1. User A @bot -> activates 0-60s hot attention window
+    d0 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="int_1",
+            scene="group",
+            group_id=50001,
+            sender_qq=1001,
+            raw_text="笑死，你别这样说",
+            mentioned_qqs=[888888],
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+    )
+    assert d0.action == "direct_pass"
+
+    # 2. Third-party User B posts game screenshots + asks a question ("是这个游戏吗")
+    d1 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="int_2",
+            scene="group",
+            group_id=50001,
+            sender_qq=1002,
+            raw_text="是这个游戏吗",
+            media_meta=[{"type": "image", "url": "https://img.example.com/game1.png"}],
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+    )
+    assert d1.action == "silent"
+
+    # 3. User A replies "我不知道，我不玩" (answering B's image question, NOT bot)
+    # Hot 0.35 discount is revoked due to third-party hook -> ambiguous 0.45 score stays silent!
+    async def _ambiguous_scorer(_env, _target):
+        return {"target": "group_open", "score": 0.45, "reason": "ambiguous after interruption"}
+
+    d2 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="int_3",
+            scene="group",
+            group_id=50001,
+            sender_qq=1001,
+            raw_text="我不知道，我不玩",
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+        llm_scorer=_ambiguous_scorer,
+    )
+    assert d2.action == "silent"
+    assert "interrupted" in d2.reason
+
+    # 4. If gatekeeper LLM detects target == 'other_user', personal hot attention is cleared immediately
+    async def _other_user_scorer(_env, _target):
+        return {"target": "other_user", "score": 0.1, "reason": "talking to B"}
+
+    d3 = await gk.evaluate(
+        MessageEnvelope(
+            message_id="int_4",
+            scene="group",
+            group_id=50001,
+            sender_qq=1001,
+            raw_text="你自己看截图",
+            self_qq=888888,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+        llm_scorer=_other_user_scorer,
+    )
+    assert d3.action == "silent"
+    assert d3.target == "other_user"
+    assert await state_store.get_user_attention_age_seconds(50001, 1001) is None
+
+
+@pytest.mark.asyncio
+async def test_v190_l1_bubble_storage_identity_anchor_and_casual_punctuation(db_session):
+    from app.core.prompt_builder import format_casual_bubbles
+
+    # Whitelist guard on casual punctuation cleanup
+    assert format_casual_bubbles(["行吧。"], "行吧。") == ["行吧"]
+    assert format_casual_bubbles(["“真的假的。”"], "“真的假的。”") == ["真的假的"]
+    assert format_casual_bubbles(["已升级到 v1.9.0。"], "已升级到 v1.9.0。") == ["已升级到 v1.9.0"]
+    assert format_casual_bubbles(["看这个 https://example.com/a。"], "看这个 https://example.com/a。") == [
+        "看这个 https://example.com/a。"
+    ]
+    long_txt = "这是一段超过八十字的认真解答内容。" * 6
+    assert format_casual_bubbles([long_txt], long_txt) == [long_txt]
+
+    captured_prompts: list[list[dict]] = []
+    turn_idx = 0
+
+    async def mock_llm(_p, _k, msgs, _t, _m, **_kw):
+        nonlocal turn_idx
+        turn_idx += 1
+        captured_prompts.append(msgs)
+        if turn_idx == 1:
+            return {"choices": [{"message": {"content": "哎呀今天群里怎么突然这么热闹呀。\n感觉大家现在心情都很不错呢。"}}]}
+        return {"choices": [{"message": {"content": "我就爱插嘴"}}]}
+
+    store = StateStore(force_memory=True)
+    hub = ModelHubService("k-v19-fmt", AlertService("k-v19-fmt"), http_caller=mock_llm)
+    await hub.upsert_provider(
+        db_session,
+        {
+            "slot": "main_brain",
+            "role": "primary",
+            "name": "Brain-Fmt",
+            "protocol": "openai_compatible",
+            "base_url": "https://api.example.com/v1",
+            "model_name": "m1",
+            "api_key": "k",
+        },
+    )
+    pipe = CompanionPipeline(
+        store=store,
+        identity_service=IdentityService(),
+        gatekeeper=GatekeeperService(store=store),
+        memory_service=MemoryService(),
+        model_hub=hub,
+        adapter=SnowLumaAdapter(http_url=""),
+        event_bus=PluginEventBus(),
+    )
+
+    # Turn 1: multi-bubble reply with trailing Chinese periods -> stripped & stored with '\n'
+    res1 = await pipe.process_envelope(
+        db_session,
+        MessageEnvelope(
+            message_id="fmt_1",
+            scene="group",
+            group_id=60001,
+            sender_qq=2001,
+            sender_nickname="老六",
+            raw_text="小呆呆怎么不说话",
+            mentioned_qqs=[888888],
+            self_qq=888888,
+        ),
+    )
+    assert res1["bubbles"] == ["哎呀今天群里怎么突然这么热闹呀", "感觉大家现在心情都很不错呢"]
+    bot_msg = (
+        await db_session.execute(select(ChatMessage).where(ChatMessage.gatekeeper_decision == "bot_reply"))
+    ).scalar_one()
+    assert bot_msg.raw_text == "哎呀今天群里怎么突然这么热闹呀\n感觉大家现在心情都很不错呢"
+
+    # Turn 2: prompt static prefix has self-identity anchor, and L1 renders [我(小呆呆)] per bubble
+    await pipe.process_envelope(
+        db_session,
+        MessageEnvelope(
+            message_id="fmt_2",
+            scene="group",
+            group_id=60001,
+            sender_qq=2001,
+            sender_nickname="老六",
+            raw_text="和AI吵起来了",
+            mentioned_qqs=[888888],
+            self_qq=888888,
+        ),
+    )
+    sys_static = captured_prompts[1][0]["content"]
+    sys_dynamic = captured_prompts[1][-2]["content"]
+    assert "「AI」「机器人」" in sys_static
+    assert "第二人称「你」" in sys_static
+    assert "[我(小呆呆)]: 哎呀今天群里怎么突然这么热闹呀" in sys_dynamic
+    assert "[我(小呆呆)]: 感觉大家现在心情都很不错呢" in sys_dynamic
+
+
+@pytest.mark.asyncio
+async def test_v190_gatekeeper_image_visibility_and_async_caption(db_session):
+    png_bytes = _make_png_bytes((30, 60, 200), (240, 200, 40))
+    gk_states: list[str] = []
+
+    async def mock_llm(provider, _k, msgs, _t, _m, **_kw):
+        if provider.slot == "gatekeeper":
+            gk_states.append(msgs[-1]["content"])
+            return {"choices": [{"message": {"content": '{"target":"other_user","score":0.1,"reason":"discussing image"}'}}]}
+        return {"choices": [{"message": {"content": "原神抽卡歪了截图"}}]}
+
+    store = StateStore(force_memory=True)
+    hub = ModelHubService("k-v19-vis", AlertService("k-v19-vis"), http_caller=mock_llm)
+    for slot in ("main_brain", "gatekeeper"):
+        await hub.upsert_provider(
+            db_session,
+            {
+                "slot": slot,
+                "role": "primary",
+                "name": f"P-{slot}",
+                "protocol": "openai_compatible",
+                "base_url": "https://api.example.com/v1",
+                "model_name": "m1",
+                "api_key": "k",
+            },
+        )
+
+    mm = MultimodalService(image_fetcher=lambda _url: asyncio.sleep(0, result=png_bytes))
+    pipe = CompanionPipeline(
+        store=store,
+        identity_service=IdentityService(),
+        gatekeeper=GatekeeperService(store=store),
+        memory_service=MemoryService(),
+        model_hub=hub,
+        adapter=SnowLumaAdapter(),
+        event_bus=PluginEventBus(),
+        multimodal_service=mm,
+    )
+
+    # 1. User B posts an image-only message (raw_text == "") -> silent, then background caption populates ImageVisionCache
+    img_url = "https://img.example.com/gacha_pull.png"
+    res_img = await pipe.process_envelope(
+        db_session,
+        MessageEnvelope(
+            message_id="vis_img_1",
+            scene="group",
+            group_id=60002,
+            sender_qq=3002,
+            sender_nickname="路人B",
+            raw_text="",
+            media_meta=[{"type": "image", "url": img_url}],
+            self_qq=888888,
+        ),
+    )
+    assert res_img["handled"] == "silent"
+    captioned = await pipe.caption_image_items([{"type": "image", "url": img_url}], session=db_session)
+    assert captioned == 1
+
+    # 2. Next message enters Gatekeeper LLM -> recent context includes '[图片: 原神抽卡歪了截图]' instead of dropping!
+    res_follow = await pipe.process_envelope(
+        db_session,
+        MessageEnvelope(
+            message_id="vis_txt_2",
+            scene="group",
+            group_id=60002,
+            sender_qq=3001,
+            sender_nickname="路人A",
+            raw_text="我不玩这个",
+            self_qq=888888,
+        ),
+    )
+    assert res_follow["handled"] == "silent"
+    assert any("[图片: 原神抽卡歪了截图]" in st for st in gk_states)
+
+
+@pytest.mark.asyncio
+async def test_v190_debouncer_max_wait_and_generation_cancellation(db_session):
+    from app.core.redis_store import MessageDebouncer
+
+    # 1. MessageDebouncer respects max_wait_seconds cap even on continuous pushes
+    flushed_batches: list[list[str]] = []
+    deb = MessageDebouncer(window_seconds=0.35, max_batch_size=8, max_wait_seconds=0.20)
+
+    async def _on_batch(batch):
+        flushed_batches.append(batch)
+
+    await deb.push("k1", "a", _on_batch)
+    await asyncio.sleep(0.10)
+    await deb.push("k1", "b", _on_batch)
+    await asyncio.sleep(0.22)
+    assert flushed_batches == [["a", "b"]]
+
+    # 2. generation_id cancels stale remaining bubbles during inter-bubble sleep without blocking group lock
+    async def mock_llm(_p, _k, _msgs, _t, _m, **_kw):
+        return {"choices": [{"message": {"content": "第一句冒泡先把话说清楚啦。\n第二句冒泡肯定长过二十八字所以不会合并在一起对吧哈哈哈"}}]}
+
+    store = StateStore(force_memory=True)
+    hub = ModelHubService("k-v19-gen", AlertService("k-v19-gen"), http_caller=mock_llm)
+    await hub.upsert_provider(
+        db_session,
+        {
+            "slot": "main_brain",
+            "role": "primary",
+            "name": "Brain-Gen",
+            "protocol": "openai_compatible",
+            "base_url": "https://api.example.com/v1",
+            "model_name": "m1",
+            "api_key": "k",
+        },
+    )
+    pipe = CompanionPipeline(
+        store=store,
+        identity_service=IdentityService(),
+        gatekeeper=GatekeeperService(store=store),
+        memory_service=MemoryService(),
+        model_hub=hub,
+        adapter=SnowLumaAdapter(http_url=""),
+        event_bus=PluginEventBus(),
+        bubble_delay_min_seconds=0.25,
+        bubble_delay_max_seconds=0.25,
+    )
+
+    task1 = asyncio.create_task(
+        pipe.process_envelope(
+            db_session,
+            MessageEnvelope(
+                message_id="gen_1",
+                scene="group",
+                group_id=60003,
+                sender_qq=4001,
+                sender_nickname="小王",
+                raw_text="小呆呆说两句",
+                mentioned_qqs=[888888],
+                self_qq=888888,
+            ),
+        )
+    )
+    # Wait briefly so task1 finishes LLM and enters inter-bubble sleep outside the group lock
+    await asyncio.sleep(0.08)
+    # Incoming silent message in same group increments generation_id while task1 is sleeping
+    res2 = await pipe.process_envelope(
+        db_session,
+        MessageEnvelope(
+            message_id="gen_2",
+            scene="group",
+            group_id=60003,
+            sender_qq=4002,
+            sender_nickname="小李",
+            raw_text="打断一下",
+            self_qq=888888,
+        ),
+    )
+    assert res2["handled"] == "silent"
+    res1 = await task1
+    assert res1["cancelled_stale"] is True
+    assert len(res1["bubbles"]) == 1

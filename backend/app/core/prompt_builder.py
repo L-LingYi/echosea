@@ -23,7 +23,9 @@ DEFAULT_BANNED_PHRASES = [
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是小呆呆，群里相处很久的损友兼陪伴者。说话自然简短、像真人打字，不要像客服或AI助手。"
-    "严禁使用“接住了、记下了、作为AI、我理解你的感受、希望这能帮到你”等机械套话。"
+    "日常闲聊优先输出 3-15 字短句，没有好梗时可以直接平淡接话，不必每句都硬抖机灵、反问或强行总结。"
+    "严禁使用「像……似的」「不知道的人还以为……」「这不就是典型的……」等套路比喻模板，"
+    "以及「接住了、记下了、作为AI、我理解你的感受、希望这能帮到你」等机械套话。"
     "不要盲目讨好或过度道歉，该吐槽就吐槽，不知道就直说不知道。"
     "需要斗图时可在句尾附轻量标签如 [sticker:laugh] 或 [表情:无语]。"
 )
@@ -83,6 +85,42 @@ def split_natural_bubbles(text: str, max_bubbles: int = 3) -> list[str]:
     return [b for b in restored if b]
 
 
+def format_casual_bubbles(
+    bubbles: list[str],
+    full_text: str,
+    max_casual_len: int = 80,
+) -> list[str]:
+    """Strip robotic trailing periods and outer quotes in casual short chat while preserving URLs/code/long replies."""
+    if not bubbles:
+        return []
+    raw_full = (full_text or "").strip()
+    if (
+        len(raw_full) > max_casual_len
+        or "http://" in raw_full
+        or "https://" in raw_full
+        or "```" in raw_full
+        or bool(re.search(r"(?:^|\n)\s*(?:\d+\.|- )\s+", raw_full))
+    ):
+        return bubbles
+
+    formatted: list[str] = []
+    for b in bubbles:
+        item = b.strip()
+        if not item:
+            continue
+        # Unwrap single outer quote pair when the whole bubble was quoted by the LLM
+        if len(item) >= 2 and (
+            (item.startswith("“") and item.endswith("”") and item[1:-1].count("“") == 0 and item[1:-1].count("”") == 0)
+            or (item.startswith('"') and item.endswith('"') and item[1:-1].count('"') == 0)
+        ):
+            item = item[1:-1].strip()
+        # Strip robotic trailing Chinese full-stop '。' (keep ! ? ~ ... and version/decimal dots)
+        item = re.sub(r"。+$", "", item).strip()
+        if item:
+            formatted.append(item)
+    return formatted or bubbles
+
+
 def build_prompt_messages(
     persona: PersonaVersion,
     memory_ctx: dict[str, Any],
@@ -104,7 +142,9 @@ def build_prompt_messages(
     """
     static_lines = [
         persona.system_prompt,
-        f"你的名字是「{persona.bot_name}」，常用别称：{', '.join(persona.aliases or [])}。",
+        f"你的名字是「{persona.bot_name}」，常用别称：{', '.join(persona.aliases or [])}。"
+        f"群友口中的「AI」「机器人」「{persona.bot_name}」及相关别称均指你本人；回复当前发言人必须使用第二人称「你」，不要把当面说话的人称作「他/她」。",
+        "日常闲聊保持简短口语化（优先 3-15 字短句），没有好梗时不必硬抖机灵或使用「像……似的」「不知道的人还以为……」等比喻模板。",
         f"禁止使用的词句：{', '.join(persona.banned_phrases or [])}。",
     ]
     if enable_search_tools:
@@ -173,12 +213,24 @@ def build_prompt_messages(
         ):
             history_items = history_items[:-1]
         if history_items:
-            recent = "\n".join(
-                f"[{m['sender']}(QQ:{m['sender_qq']})]: {m['text']}"
-                + (f" (引用: {m['reply_to']})" if m.get("reply_to") else "")
-                for m in history_items[-12:]
-            )
-            dynamic_parts.append(f"[近期群聊/私聊上下文（严格按发言人区分，切勿张冠李戴）]\n{recent}")
+            recent_lines: list[str] = []
+            for m in history_items[-12:]:
+                text_val = (m.get("text") or "").strip()
+                media_hint = (m.get("media_hint") or "").strip()
+                if m.get("is_bot"):
+                    bot_lines = [ln.strip() for ln in text_val.splitlines() if ln.strip()] or ([media_hint] if media_hint else [])
+                    for idx_ln, ln in enumerate(bot_lines):
+                        suffix = f" (引用: {m['reply_to']})" if (idx_ln == 0 and m.get("reply_to")) else ""
+                        recent_lines.append(f"[我({persona.bot_name})]: {ln}{suffix}")
+                else:
+                    combined = " ".join(part for part in (text_val, media_hint) if part)
+                    if not combined:
+                        continue
+                    suffix = f" (引用: {m['reply_to']})" if m.get("reply_to") else ""
+                    recent_lines.append(f"[{m['sender']}(QQ:{m['sender_qq']})]: {combined}{suffix}")
+            if recent_lines:
+                recent = "\n".join(recent_lines)
+                dynamic_parts.append(f"[近期群聊/私聊上下文（严格按发言人区分，切勿张冠李戴）]\n{recent}")
     dynamic_parts.append(
         f"[发言人归属锚点] 下面即将回复的这条消息由「{envelope.display_name}」(QQ:{envelope.sender_qq})发出。"
         "请务必分清上下文中每一位群友各自说的话，不要把别人(例如前一条发言人)的特征或观点错安到当前发言人头上。"
