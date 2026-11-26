@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_admin, get_db, get_runtime
 from app.core.profile_schema import normalize_profile, relationship_tier
 from app.models.db import AmbientSummary, ChatMessage, GroupExpression, MemoryEpisode, QQIdentity, SelfLifeState
-from app.models.schemas import ExpressionReviewRequest, ForgetRequest, IdentityUpdate
+from app.models.schemas import EpisodeUpdateRequest, ExpressionReviewRequest, ForgetRequest, IdentityUpdate
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
@@ -157,6 +157,52 @@ async def list_episodes(
     ]
 
 
+@router.patch("/episodes/{episode_id}")
+async def update_episode(
+    episode_id: int,
+    payload: EpisodeUpdateRequest,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+):
+    ep = await session.get(MemoryEpisode, episode_id)
+    if ep is None:
+        raise HTTPException(status_code=404, detail="Memory episode not found")
+    if payload.title is not None:
+        ep.title = payload.title.strip()[:160]
+    if payload.content is not None:
+        ep.content = payload.content.strip()
+    if payload.importance is not None:
+        ep.importance = float(payload.importance)
+    if payload.is_anniversary is not None:
+        ep.is_anniversary = bool(payload.is_anniversary)
+    if payload.is_archived is not None:
+        ep.is_archived = bool(payload.is_archived)
+    await session.flush()
+    return {
+        "ok": True,
+        "id": ep.id,
+        "title": ep.title,
+        "content": ep.content,
+        "importance": ep.importance,
+        "is_anniversary": ep.is_anniversary,
+        "is_archived": ep.is_archived,
+    }
+
+
+@router.delete("/episodes/{episode_id}")
+async def delete_episode(
+    episode_id: int,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+):
+    ep = await session.get(MemoryEpisode, episode_id)
+    if ep is None:
+        raise HTTPException(status_code=404, detail="Memory episode not found")
+    await session.delete(ep)
+    await session.flush()
+    return {"ok": True, "id": episode_id}
+
+
 @router.get("/expressions")
 async def list_expressions(
     status: str | None = None,
@@ -235,17 +281,18 @@ async def one_click_forget(
 @router.get("/graph")
 async def consciousness_sea_graph(
     limit_identities: int = Query(default=40, ge=5, le=120),
-    limit_episodes: int = Query(default=40, ge=5, le=120),
+    limit_episodes: int = Query(default=60, ge=5, le=160),
+    include_archived: bool = Query(default=False),
     _admin=Depends(get_current_admin),
     session: AsyncSession = Depends(get_db),
     runtime=Depends(get_runtime),
 ):
-    """Consciousness Sea (意识海): Multi-layer Memory Knowledge Graph for interactive WebUI visualization.
+    """Consciousness Sea (意识海): Multi-layer Memory Knowledge Graph for interactive 3D/2D WebUI visualization.
 
     Returns nodes & edges connecting:
     - L5 Self Core (EchoSea 自我意识)
     - Group Worlds (群聊域)
-    - L4 QQ Identities (熟人卡 + 亲密度 + 公开/私密画像)
+    - L4 QQ Identities (熟人卡 + 亲密度 + 公开/私密画像 + 关联记忆计数)
     - L2 Ambient Summaries (边缘旁听摘要)
     - L3 Episodes & Anniversaries (情景记忆，标记 public_group / private_dm 半隔离边界)
     - L4 Group Expressions (群黑话)
@@ -253,11 +300,15 @@ async def consciousness_sea_graph(
     nodes: list[dict] = []
     edges: list[dict] = []
     node_ids: set[str] = set()
+    node_by_id: dict[str, dict] = {}
 
-    def _add_node(nid: str, label: str, layer: str, **extra) -> None:
+    def _add_node(nid: str, label: str, layer: str, **extra) -> dict:
         if nid not in node_ids:
             node_ids.add(nid)
-            nodes.append({"id": nid, "label": label, "layer": layer, **extra})
+            item = {"id": nid, "label": label, "layer": layer, **extra}
+            nodes.append(item)
+            node_by_id[nid] = item
+        return node_by_id[nid]
 
     def _add_edge(src: str, dst: str, relation: str, strength: float = 0.6) -> None:
         if src in node_ids and dst in node_ids and src != dst:
@@ -316,6 +367,7 @@ async def consciousness_sea_graph(
             detail={
                 "qq_id": ident.qq_id,
                 "nickname": ident.nickname,
+                "group_cards": ident.group_cards or {},
                 "known_names": ident.known_names,
                 "relationship_level": ident.relationship_level,
                 "relationship_tier": tier_key,
@@ -323,6 +375,10 @@ async def consciousness_sea_graph(
                 "public_profile": pub_norm,
                 "private_profile": priv_norm,
                 "has_private_isolation": has_private,
+                "last_seen_at": ident.last_seen_at.isoformat() if ident.last_seen_at else None,
+                "episode_count": 0,
+                "private_episode_count": 0,
+                "ambient_count": 0,
             },
         )
         _add_edge("self_core", uid, "熟人羁绊" if ident.relationship_level > 0 else "初识", strength=0.75)
@@ -338,10 +394,11 @@ async def consciousness_sea_graph(
 
     # 3. L2 Ambient Rolling Summaries
     ambients = list(
-        (await session.execute(select(AmbientSummary).order_by(AmbientSummary.window_end.desc()).limit(20))).scalars().all()
+        (await session.execute(select(AmbientSummary).order_by(AmbientSummary.window_end.desc()).limit(24))).scalars().all()
     )
     for amb in ambients:
         gnid = f"group_{amb.group_id}"
+        groups_seen.add(amb.group_id)
         _add_node(gnid, f"群 {amb.group_id}", "group", size=20, summary=f"群聊记忆域 {amb.group_id}", detail={"group_id": amb.group_id})
         _add_edge("self_core", gnid, "常驻群域", strength=0.85)
         aid = f"amb_{amb.id}"
@@ -350,8 +407,9 @@ async def consciousness_sea_graph(
             f"边缘旁听 #{amb.id}",
             "L2_ambient",
             size=12,
-            summary=amb.summary_text[:72],
+            summary=amb.summary_text[:90],
             detail={
+                "id": amb.id,
                 "group_id": amb.group_id,
                 "message_count": amb.message_count,
                 "summary_text": amb.summary_text,
@@ -361,14 +419,17 @@ async def consciousness_sea_graph(
         _add_edge(gnid, aid, "旁听沉淀", strength=0.55)
         for pqq in (amb.active_participants or [])[:6]:
             if int(pqq) not in bot_qqs:
-                _add_edge(f"qq_{pqq}", aid, "参与讨论", strength=0.45)
+                pid = f"qq_{pqq}"
+                if pid in node_by_id:
+                    node_by_id[pid]["detail"]["ambient_count"] += 1
+                    _add_edge(pid, aid, "参与讨论", strength=0.45)
 
     # 4. L3 Episodic Memories & Anniversaries (shows public_group vs private_dm semi-isolation!)
-    episodes = list(
-        (await session.execute(select(MemoryEpisode).order_by(MemoryEpisode.importance.desc(), MemoryEpisode.created_at.desc()).limit(limit_episodes)))
-        .scalars()
-        .all()
-    )
+    ep_stmt = select(MemoryEpisode)
+    if not include_archived:
+        ep_stmt = ep_stmt.where(MemoryEpisode.is_archived.is_(False))
+    ep_stmt = ep_stmt.order_by(MemoryEpisode.is_anniversary.desc(), MemoryEpisode.importance.desc(), MemoryEpisode.created_at.desc()).limit(limit_episodes)
+    episodes = list((await session.execute(ep_stmt)).scalars().all())
     for ep in episodes:
         eid = f"ep_{ep.id}"
         layer = "L3_private_episode" if ep.scope == "private_dm" else "L3_public_episode"
@@ -377,19 +438,32 @@ async def consciousness_sea_graph(
             ep.title or f"情景 #{ep.id}",
             layer,
             size=16 if ep.is_anniversary else 13,
-            summary=ep.content[:80],
+            summary=ep.content[:96],
             detail={
+                "id": ep.id,
                 "scope": ep.scope,
+                "group_id": ep.group_id,
+                "qq_id": ep.qq_id,
                 "title": ep.title,
                 "content": ep.content,
                 "importance": ep.importance,
                 "is_anniversary": ep.is_anniversary,
+                "is_archived": ep.is_archived,
+                "recall_count": ep.recall_count,
+                "last_recalled_at": ep.last_recalled_at.isoformat() if ep.last_recalled_at else None,
                 "created_at": ep.created_at.isoformat(),
             },
         )
         if ep.qq_id and int(ep.qq_id) not in bot_qqs:
-            _add_edge(f"qq_{ep.qq_id}", eid, "私密记忆(半隔离)" if ep.scope == "private_dm" else "共同经历", strength=0.8)
+            pid = f"qq_{ep.qq_id}"
+            if pid in node_by_id:
+                node_by_id[pid]["detail"]["episode_count"] += 1
+                if ep.scope == "private_dm":
+                    node_by_id[pid]["detail"]["private_episode_count"] += 1
+                    node_by_id[pid]["detail"]["has_private_isolation"] = True
+            _add_edge(pid, eid, "私密记忆(半隔离)" if ep.scope == "private_dm" else "共同经历", strength=0.8)
         if ep.group_id:
+            groups_seen.add(ep.group_id)
             gnid = f"group_{ep.group_id}"
             _add_node(gnid, f"群 {ep.group_id}", "group", size=20, summary=f"群聊记忆域 {ep.group_id}", detail={"group_id": ep.group_id})
             _add_edge(gnid, eid, "群内情景", strength=0.65)
@@ -406,8 +480,9 @@ async def consciousness_sea_graph(
             "L4_slang",
             size=11,
             summary=f"{sl.meaning} ({sl.status})",
-            detail={"group_id": sl.group_id, "phrase": sl.phrase, "meaning": sl.meaning, "status": sl.status, "usage_count": sl.usage_count},
+            detail={"id": sl.id, "group_id": sl.group_id, "phrase": sl.phrase, "meaning": sl.meaning, "status": sl.status, "usage_count": sl.usage_count},
         )
+        groups_seen.add(sl.group_id)
         gnid = f"group_{sl.group_id}"
         _add_node(gnid, f"群 {sl.group_id}", "group", size=20, summary=f"群聊记忆域 {sl.group_id}", detail={"group_id": sl.group_id})
         _add_edge("self_core", gnid, "常驻群域", strength=0.85)
@@ -419,9 +494,10 @@ async def consciousness_sea_graph(
         "stats": {
             "node_count": len(nodes),
             "edge_count": len(edges),
-            "identities": len(identities),
+            "identities": visible_identities,
             "episodes": len(episodes),
             "ambient_summaries": len(ambients),
             "slangs": len(slangs),
+            "groups": len(groups_seen),
         },
     }

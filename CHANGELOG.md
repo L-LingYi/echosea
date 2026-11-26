@@ -1,6 +1,10 @@
 # 更新日志（Changelog）
 
 ## v1.9.2 (2026-11-26)
+- **3D 意识海重构与 WebUI 深海观测站视觉升级**：
+  - **3D 分层星海与人物名片 / 记忆摘要卡**：将 `frontend/js/sea.js` 升级为零依赖 3D 轨道相机 + 3D 投影浮动 DOM 卡片混合渲染引擎；支持「人物 · 记忆」默认聚焦视图与「全量五层星海」切换、`3D 星海 / 2D 平面` 切换、平滑镜头飞行聚焦、关键字检索直达、按群域筛选与自动缓慢自转。人物节点直接展示迷你名片（熟人等级、称呼/风格、特征标签与记忆计数），点击人物即可展开围绕 TA 的记忆摘要卡（区分群情景、纪念日与私聊半隔离边界）。
+  - **记忆图谱增强与直接管理**：`GET /api/memory/graph` 新增 `include_archived` 参数与人物关联记忆计数、情景回忆次数/重要度等元数据；新增 `PATCH /api/memory/episodes/{id}` 与 `DELETE /api/memory/episodes/{id}` 接口，支持在意识海详情抽屉中直接标星纪念日、归档或删除记忆。
+  - **全站 UI 统一视觉精修**：重构 `frontend/css/app.css` 与 `frontend/index.html` 为「深海观测站」双色主题系统（雾海浅色 / 深海夜幕），使用统一线性 SVG 图标替换侧边栏 Emoji，统一等宽数字排版、玻璃态工具栏与可收起详情抽屉。
 - **群聊/私聊引用回溯与私聊多轮连续性修复**：
   - `SnowLumaAdapter` 捕获取消丢弃的网关真实 `message_id`（HTTP 回执与 WS Echo 均支持）并写入 `OutboxDelivery.onebot_message_id`；`CompanionPipeline` 按每个实际发送成功的气泡分别写入 `ChatMessage`（保留 `request_id` 关联整轮，同时覆盖搜索过渡语与语音回复），发送失败的气泡不再写入已发言记录。
   - `ChatMessage` 新增 `peer_qq` 与 `request_id` 字段（含幂等迁移 `db/migrations_v1_5.sql`），修复私聊 L1 历史查询丢失机器人上一句及私聊引用机器人回复查不到原文的问题。

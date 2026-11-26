@@ -140,6 +140,14 @@ class ExpressionReviewRequest(BaseModel):
     meaning: str | None = None
 
 
+class EpisodeUpdateRequest(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    importance: float | None = Field(default=None, ge=0.0, le=1.0)
+    is_anniversary: bool | None = None
+    is_archived: bool | None = None
+
+
 # --- Alerts ---
 class AlertChannelUpsert(BaseModel):
     channel_type: Literal["smtp", "webhook", "qq_admin"]

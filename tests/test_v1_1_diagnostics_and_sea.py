@@ -179,13 +179,59 @@ def test_v1_1_jev_gatekeeper_traces_probe_isolation_tts_receipts_and_consciousne
         assert dash["tts"]["onebot_accepted_count"] == 1
         assert dash["tts"]["onebot_acceptance_rate_pct"] == 100.0
 
-        # 8. Consciousness Sea Memory Graph API (/api/memory/graph)
+        # 8. Consciousness Sea Memory Graph API (/api/memory/graph) & Episode CRUD
         graph = client.get("/api/memory/graph", headers=headers).json()
         node_layers = {n["layer"] for n in graph["nodes"]}
         assert "L5_self" in node_layers
         assert "L4_identity" in node_layers
         assert "group" in node_layers
         assert graph["stats"]["edge_count"] >= 2
+        ident_node = next(n for n in graph["nodes"] if n["layer"] == "L4_identity")
+        assert "episode_count" in ident_node["detail"]
+        assert "private_episode_count" in ident_node["detail"]
+
+        # Seed a MemoryEpisode and verify graph enrichment + PATCH/DELETE episode endpoints
+        import asyncio
+        from app.models.db import MemoryEpisode
+
+        async def _seed_ep():
+            async with app.state.db_manager.session_factory() as s:
+                ep = MemoryEpisode(
+                    scope="public_group",
+                    group_id=7777,
+                    qq_id=50001,
+                    title="烧烤摊排队趣事",
+                    content="阿泽说今晚烧烤摊排队两小时。",
+                    importance=0.82,
+                )
+                s.add(ep)
+                await s.commit()
+                await s.refresh(ep)
+                return ep.id
+
+        ep_id = asyncio.run(_seed_ep())
+        g2 = client.get("/api/memory/graph", headers=headers).json()
+        ep_node = next(n for n in g2["nodes"] if n["id"] == f"ep_{ep_id}")
+        assert ep_node["detail"]["id"] == ep_id
+        assert ep_node["detail"]["qq_id"] == 50001
+        p_node = next(n for n in g2["nodes"] if n["id"] == "qq_50001")
+        assert p_node["detail"]["episode_count"] >= 1
+
+        # Star & archive episode -> hidden by default, shown when include_archived=true
+        patched = client.patch(
+            f"/api/memory/episodes/{ep_id}",
+            headers=headers,
+            json={"is_anniversary": True, "is_archived": True},
+        ).json()
+        assert patched["ok"] is True and patched["is_anniversary"] is True and patched["is_archived"] is True
+        g_no_arch = client.get("/api/memory/graph", headers=headers).json()
+        assert all(n["id"] != f"ep_{ep_id}" for n in g_no_arch["nodes"])
+        g_with_arch = client.get("/api/memory/graph?include_archived=true", headers=headers).json()
+        assert any(n["id"] == f"ep_{ep_id}" for n in g_with_arch["nodes"])
+
+        # Delete episode cleanly
+        deleted = client.delete(f"/api/memory/episodes/{ep_id}", headers=headers).json()
+        assert deleted["ok"] is True and deleted["id"] == ep_id
 
         # 9. Labeled Gatekeeper & Voice-Intent Benchmark API
         bench = client.post(
