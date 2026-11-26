@@ -16,6 +16,7 @@ import logging
 import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -39,6 +40,7 @@ from app.models.db import (
     OutboxDelivery,
     PersonaVersion,
     QQIdentity,
+    StickerAsset,
     SystemConfig,
 )
 
@@ -142,6 +144,9 @@ class ReflectionService:
         # 3. Bot expression self-audit on recent 20 replies
         audit = await self._audit_bot_expression_habits(session, now)
 
+        # 3.5. Autonomous review of pending auto-collected stickers (LLM batch or safe heuristic)
+        sticker_review = await self._review_pending_stickers(session)
+
         cutoff = now - timedelta(hours=lookback_hours)
         stmt = (
             select(ChatMessage)
@@ -164,6 +169,8 @@ class ReflectionService:
                 "few_shot_candidates": few_shot_candidates,
                 "episodes_decayed": metabolism["decayed"],
                 "episodes_archived": metabolism["archived"],
+                "stickers_approved": sticker_review["approved"],
+                "stickers_rejected": sticker_review["rejected"],
                 **audit,
             }
 
@@ -196,6 +203,8 @@ class ReflectionService:
             "persona_advices_created": audit["persona_advices_created"] + persona_advices_created,
             "correction_hints_created": audit["correction_hints_created"],
             "banned_phrase_candidates": audit["banned_phrase_candidates"],
+            "stickers_approved": sticker_review["approved"],
+            "stickers_rejected": sticker_review["rejected"],
         }
 
     async def _finalize_cold_drops(self, session: AsyncSession, now_utc: datetime) -> int:
@@ -901,3 +910,105 @@ class ReflectionService:
                 if isinstance(vals, list):
                     merged[key].extend(vals)
         return merged
+
+    async def _review_pending_stickers(self, session: AsyncSession, limit: int = 30) -> dict[str, int]:
+        """Auto-review pending stickers during reflection using the reflection LLM (with safe heuristic fallback)."""
+        stmt = (
+            select(StickerAsset)
+            .where(StickerAsset.status == "pending")
+            .order_by(StickerAsset.positive_reactions.desc(), StickerAsset.appearance_count.desc(), StickerAsset.id.asc())
+            .limit(limit)
+        )
+        pending = list((await session.execute(stmt)).scalars().all())
+        if not pending:
+            return {"approved": 0, "rejected": 0}
+
+        approved = 0
+        rejected = 0
+        candidates: list[StickerAsset] = []
+        for asset in pending:
+            has_local = bool(asset.file_path and Path(asset.file_path).is_file())
+            has_url = bool((asset.source_url or "").strip().startswith(("http://", "https://")))
+            if not has_local and not has_url:
+                asset.status = "rejected"
+                rejected += 1
+            else:
+                candidates.append(asset)
+
+        if not candidates:
+            await session.flush()
+            return {"approved": approved, "rejected": rejected}
+
+        decisions_by_id: dict[int, dict[str, Any]] = {}
+        try:
+            payload_items = [
+                {
+                    "id": a.id,
+                    "emotion_tags": a.emotion_tags or [],
+                    "context_hint": (a.context_hint or "")[:140],
+                    "appearance_count": a.appearance_count,
+                    "positive_reactions": a.positive_reactions,
+                }
+                for a in candidates
+            ]
+            prompt = (
+                "你是群聊陪伴机器人的夜间反思审核员。请根据以下待审核群聊表情包的标签、语境说明和热度，判断每张图是否适合收录进斗图库。\n"
+                "规则：\n"
+                "1. 若看起来像日常搞笑/吐槽/情绪表达表情包，且适合在群聊复用 -> decision='approved'，并可补充更精准的 2-3 个中文情绪标签与简短使用场景说明。\n"
+                "2. 若看起来像代码/报错截图、聊天记录截图、付款码/二维码、广告、个人隐私照或毫无复用价值的普通图 -> decision='rejected'。\n"
+                "3. 仅输出纯 JSON（不要 markdown 代码块）："
+                '{"reviews":[{"id":1,"decision":"approved","emotion_tags":["无语","吐槽"],"context_hint":"看到离谱发言时使用"}]}\n\n'
+                + json.dumps(payload_items, ensure_ascii=False)
+            )
+            res = await self.model_hub.chat_complete(
+                session,
+                slot="reflection",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=1000,
+                source="reflection",
+            )
+            parsed = self._parse_llm_json(res.content)
+            for item in parsed.get("reviews") or []:
+                if isinstance(item, dict) and item.get("id") is not None:
+                    try:
+                        decisions_by_id[int(item["id"])] = item
+                    except (TypeError, ValueError):
+                        continue
+        except Exception as exc:
+            logger.debug("Reflection sticker LLM review skipped/failed [%s]: %s", type(exc).__name__, exc)
+
+        reject_cues = ("截图", "报错", "二维码", "收款码", "付款码", "验证码", "error", "traceback", "广告")
+        for asset in candidates:
+            item = decisions_by_id.get(asset.id)
+            if item:
+                dec = str(item.get("decision") or "").strip().lower()
+                if dec == "approved":
+                    asset.status = "approved"
+                    tags = [str(t).strip()[:20] for t in (item.get("emotion_tags") or []) if str(t).strip()]
+                    if tags:
+                        asset.emotion_tags = list(dict.fromkeys(tags))[:5]
+                    hint = str(item.get("context_hint") or "").strip()
+                    if hint:
+                        asset.context_hint = hint[:200]
+                    approved += 1
+                    continue
+                if dec == "rejected":
+                    asset.status = "rejected"
+                    rejected += 1
+                    continue
+
+            # Safe deterministic fallback when reflection LLM is unavailable or undecided
+            hint_lower = (asset.context_hint or "").lower()
+            tags_clean = [str(t).strip().lower() for t in (asset.emotion_tags or []) if str(t).strip()]
+            has_specific_tags = bool(tags_clean) and any(t not in ("fun", "未打标") for t in tags_clean)
+            looks_like_noise = any(cue in hint_lower for cue in reject_cues)
+            if looks_like_noise and asset.appearance_count <= 1 and asset.positive_reactions == 0:
+                asset.status = "rejected"
+                rejected += 1
+            elif has_specific_tags or asset.appearance_count >= 2 or asset.positive_reactions >= 1:
+                asset.status = "approved"
+                approved += 1
+
+        await session.flush()
+        return {"approved": approved, "rejected": rejected}

@@ -87,16 +87,19 @@ export async function loadStickers() {
     'stickerGrid',
     list.map(s => {
       const thumbBox = el('div', { className: 'sticker-thumb' });
-      const imgUrl = safeExternalUrl(s.source_url);
-      if (imgUrl) {
-        const img = el('img', { src: imgUrl, alt: 'sticker' });
-        img.addEventListener('error', () => {
-          thumbBox.replaceChildren(el('span', { style: 'font-size:32px;' }, '🎭'));
-        });
-        thumbBox.appendChild(img);
-      } else {
-        thumbBox.appendChild(el('span', { style: 'font-size:32px;' }, '🎭'));
-      }
+      const proxyUrl = `/api/stickers/${Number(s.id)}/image`;
+      const fallbackUrl = safeExternalUrl(s.source_url);
+      const img = el('img', { src: proxyUrl, alt: 'sticker', loading: 'lazy', referrerpolicy: 'no-referrer' });
+      let triedFallback = false;
+      img.addEventListener('error', () => {
+        if (!triedFallback && fallbackUrl) {
+          triedFallback = true;
+          img.src = fallbackUrl;
+          return;
+        }
+        thumbBox.replaceChildren(el('span', { style: 'font-size:32px;' }, '🎭'));
+      });
+      thumbBox.appendChild(img);
 
       const tags = (s.emotion_tags || []).length
         ? s.emotion_tags.map(t => badge(t, 'info'))

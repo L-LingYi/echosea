@@ -84,6 +84,7 @@ class AutoStickerReactionPlugin(CompanionPlugin):
                         asset = await runtime.sticker_service.observe_group_image(
                             session=session,
                             group_id=group_id,
+                            image_bytes=img_bytes,
                             phash=phash,
                             source_url=str(item["url"]),
                             context_hint=str(env.get("raw_text") or ""),

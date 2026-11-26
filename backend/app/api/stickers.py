@@ -1,16 +1,34 @@
 """Sticker Gallery Management & Batch Import API."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_admin, get_db, get_runtime
+from app.core.web_perception_service import _is_public_http_url
 from app.models.db import StickerAsset
 
 router = APIRouter(prefix="/api/stickers", tags=["stickers"])
+
+
+def _detect_image_mime(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return "application/octet-stream"
 
 
 @router.get("")
@@ -38,6 +56,73 @@ async def list_stickers(
         }
         for r in rows
     ]
+
+
+@router.get("/{sticker_id}/image")
+async def get_sticker_image(
+    sticker_id: int,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    """Serve cached local sticker bytes, or proxy & backfill from source_url without browser Referer issues."""
+    asset = await session.get(StickerAsset, sticker_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Sticker not found")
+
+    if asset.file_path:
+        p = Path(asset.file_path)
+        if p.is_file():
+            data = p.read_bytes()
+            if data:
+                return Response(
+                    content=data,
+                    media_type=_detect_image_mime(data),
+                    headers={"Cache-Control": "private, max-age=86400"},
+                )
+
+    url = (asset.source_url or "").strip()
+    if not url or not _is_public_http_url(url):
+        raise HTTPException(status_code=404, detail="Sticker image unavailable")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=6.0,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.content
+    except Exception:
+        raise HTTPException(status_code=404, detail="Upstream sticker image unavailable")
+
+    if not data or len(data) > 4 * 1024 * 1024:
+        raise HTTPException(status_code=404, detail="Invalid sticker image payload")
+    mime = _detect_image_mime(data)
+    if mime == "application/octet-stream":
+        ct = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not ct.startswith("image/"):
+            raise HTTPException(status_code=404, detail="Upstream response is not an image")
+        mime = ct
+
+    # Backfill local cache so future views survive QQ rkey expiration
+    try:
+        storage_dir = getattr(getattr(runtime, "sticker_service", None), "storage_dir", Path("data/stickers"))
+        Path(storage_dir).mkdir(parents=True, exist_ok=True)
+        safe_name = "".join(ch for ch in (asset.phash or f"stk_{asset.id}") if ch.isalnum() or ch in ("_", "-"))[:64]
+        dest = Path(storage_dir) / f"{safe_name}.bin"
+        dest.write_bytes(data)
+        asset.file_path = str(dest)
+        await session.flush()
+    except OSError:
+        pass
+
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @router.post("/import")

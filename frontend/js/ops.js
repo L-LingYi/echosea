@@ -395,7 +395,10 @@ export async function triggerSystemUpdate() {
 
 export async function runReflection() {
   const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' });
-  toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}`);
+  const stkPart = (r.stickers_approved || r.stickers_rejected)
+    ? `，自动审核表情包 通过 ${r.stickers_approved || 0} / 拒绝 ${r.stickers_rejected || 0}`
+    : '';
+  toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}${stkPart}`);
 }
 
 export async function openAliyunOAuth() {
