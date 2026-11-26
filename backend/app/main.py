@@ -343,11 +343,18 @@ def create_app(
 
     frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
     if frontend_dir.exists():
+        @app.middleware("http")
+        async def _no_stale_frontend_cache(request, call_next):
+            response = await call_next(request)
+            if request.url.path == "/" or request.url.path.startswith("/static/"):
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
         app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
         @app.get("/")
         async def serve_index():
-            return FileResponse(str(frontend_dir / "index.html"))
+            return FileResponse(str(frontend_dir / "index.html"), headers={"Cache-Control": "no-cache"})
 
     return app
 
