@@ -872,3 +872,119 @@ async def test_v190_debouncer_max_wait_and_generation_cancellation(db_session):
     res1 = await task1
     assert res1["cancelled_stale"] is True
     assert len(res1["bubbles"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_v1_9_at_bot_empty_text_and_alias_with_other_mention(db_session):
+    """Regression: bare @bot (or reply+@bot) must not drop as empty; alias+@other must pass and resolve mention."""
+    captured_prompts: list[list[dict]] = []
+
+    async def mock_llm(_p, _k, messages, _t, _m, **_kw):
+        captured_prompts.append(messages)
+        return {"choices": [{"message": {"content": "在呢，刚看到你叫我啦"}}]}
+
+    store = StateStore(force_memory=True)
+    hub = ModelHubService("k-v19-reg", AlertService("k-v19-reg"), http_caller=mock_llm)
+    await hub.upsert_provider(
+        db_session,
+        {
+            "slot": "main_brain",
+            "role": "primary",
+            "name": "Brain-Reg",
+            "protocol": "openai_compatible",
+            "base_url": "https://api.example.com/v1",
+            "model_name": "m1",
+            "api_key": "k",
+        },
+    )
+    pipe = CompanionPipeline(
+        store=store,
+        identity_service=IdentityService(),
+        gatekeeper=GatekeeperService(store=store),
+        memory_service=MemoryService(),
+        model_hub=hub,
+        adapter=SnowLumaAdapter(http_url=""),
+        event_bus=PluginEventBus(),
+    )
+
+    # Seed identity of the @mentioned third party (QQ 1983133592)
+    await pipe.identity_service.upsert_from_message(
+        db_session, qq_id=1983133592, nickname="如果情绪有天气", group_id=486135657
+    )
+
+    # 1. Calling bot's name + @another_member in the same message -> MUST direct_pass & resolve @1983133592!
+    r_alias_at = await pipe.handle_raw_onebot_event(
+        db_session,
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 2164459727,
+            "group_id": 486135657,
+            "user_id": 2445955246,
+            "message_id": "reg_alias_at_other",
+            "sender": {"user_id": 2445955246, "nickname": "灵丶弈"},
+            "message": [
+                {"type": "text", "data": {"text": "小呆呆我at的这个人怎么称呼 "}},
+                {"type": "at", "data": {"qq": "1983133592"}},
+            ],
+        },
+    )
+    assert r_alias_at["handled"] == "direct_pass"
+    prompt_blob = "\n".join(str(m["content"]) for m in captured_prompts[-1])
+    assert "如果情绪有天气(QQ:1983133592)" in prompt_blob
+    # Must NOT poison sender into a peer-to-peer thread
+    assert await store.get_active_peer(486135657, 2445955246) is None
+
+    # 2. Reply + bare @bot with NO extra text -> MUST NOT be dropped as empty_message_ignored!
+    r_bare_at = await pipe.handle_raw_onebot_event(
+        db_session,
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "self_id": 2164459727,
+            "group_id": 486135657,
+            "user_id": 2445955246,
+            "message_id": "reg_bare_at_reply",
+            "sender": {"user_id": 2445955246, "nickname": "灵丶弈"},
+            "message": [
+                {"type": "reply", "data": {"id": "reg_alias_at_other"}},
+                {"type": "at", "data": {"qq": "2164459727"}},
+                {"type": "text", "data": {"text": "   "}},
+            ],
+        },
+    )
+    assert r_bare_at["handled"] == "direct_pass"
+    bare_prompt_blob = "\n".join(str(m["content"]) for m in captured_prompts[-1])
+    assert "只艾特了你" in bare_prompt_blob
+    assert "小呆呆我at的这个人怎么称呼" in bare_prompt_blob
+
+    # 3. Direct vocative with 3rd-person pronouns or greeting punctuation -> direct_pass
+    gk = GatekeeperService(store=StateStore(force_memory=True))
+    for phrase in ("小呆呆，他怎么称呼", "小呆呆你刚才说啥", "喂！小呆呆在吗"):
+        dec = await gk.evaluate(
+            MessageEnvelope(message_id=f"voc_{phrase}", scene="group", group_id=1, sender_qq=10, raw_text=phrase, self_qq=2164459727),
+            bot_name="小呆呆",
+            aliases=["呆呆"],
+        )
+        assert dec.action == "direct_pass", f"Expected direct_pass for {phrase}, got {dec}"
+
+    # 4. Mid-sentence alias confirmed as target='bot' by Gatekeeper LLM -> upgraded to direct_pass
+    async def _confirm_bot(_env, _target):
+        return {"target": "bot", "score": 0.62, "reason": "Addressing bot mid-sentence"}
+
+    dec_mid = await gk.evaluate(
+        MessageEnvelope(
+            message_id="mid_alias",
+            scene="group",
+            group_id=1,
+            sender_qq=11,
+            raw_text="帮我问下小呆呆这事咋办",
+            self_qq=2164459727,
+        ),
+        bot_name="小呆呆",
+        aliases=["呆呆"],
+        llm_scorer=_confirm_bot,
+    )
+    assert dec_mid.action == "direct_pass"
+    assert dec_mid.target == "bot"
+

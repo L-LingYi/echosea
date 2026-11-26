@@ -604,7 +604,9 @@ class CompanionPipeline:
             f"group:{envelope.group_id}" if envelope.group_id is not None else f"private:{envelope.sender_qq}"
         )
         t_start = time.perf_counter()
-        if not (envelope.raw_text or "").strip() and not envelope.media_meta:
+        bot_mentioned = bool(envelope.self_qq and envelope.self_qq in envelope.mentioned_qqs)
+        replied_to_bot = bool(envelope.self_qq and envelope.quoted_sender_qq == envelope.self_qq)
+        if not (envelope.raw_text or "").strip() and not envelope.media_meta and not bot_mentioned and not replied_to_bot:
             return {"handled": "empty_message_ignored", "request_id": request_id}
 
         # 1. Strong QQ Identity Binding
@@ -621,8 +623,6 @@ class CompanionPipeline:
         cfg = await self.resolve_effective_config(session, group_id=envelope.group_id, user_qq=envelope.sender_qq)
         if not cfg.get("enabled", True):
             return {"handled": "disabled_by_config", "request_id": request_id}
-
-        replied_to_bot = bool(envelope.self_qq and envelope.quoted_sender_qq == envelope.self_qq)
 
         # 2b. Implicit Social Feedback Backfill (observe group reactions within 120s of bot reply)
         if envelope.scene == "group" and envelope.group_id is not None:
@@ -819,13 +819,18 @@ class CompanionPipeline:
         image_blocks, vision_hints, pending_vision_phashes, vision_cache_hits = await self._collect_vision_context(
             session, envelope, decision
         )
-        query_embedding = await self.model_hub.embed_text(session, envelope.raw_text)
+        recall_query = (
+            (envelope.raw_text or "").strip()
+            or (envelope.quoted_text or "").strip()
+            or (envelope.expanded_reply_text or "").strip()
+        )
+        query_embedding = await self.model_hub.embed_text(session, recall_query)
         memory_ctx = await self.memory_service.assemble_context(
             session=session,
             scene=envelope.scene,
             sender_qq=envelope.sender_qq,
             group_id=envelope.group_id,
-            query_text=envelope.raw_text,
+            query_text=recall_query,
             query_embedding=query_embedding,
         )
         briefing_text = ""
@@ -855,6 +860,26 @@ class CompanionPipeline:
             if str((r.content_json or {}).get("hint") or r.title).strip()
         ]
 
+        bot_qq = envelope.self_qq or self.adapter.bot_qq
+        other_mentioned_qqs = [q for q in envelope.mentioned_qqs if q != bot_qq]
+        mentioned_users: list[str] = []
+        if other_mentioned_qqs:
+            ident_rows = {
+                row.qq_id: row
+                for row in (
+                    await session.execute(select(QQIdentity).where(QQIdentity.qq_id.in_(other_mentioned_qqs)))
+                ).scalars().all()
+            }
+            for q in other_mentioned_qqs:
+                ident = ident_rows.get(q)
+                if ident is not None:
+                    cards = ident.group_cards if isinstance(ident.group_cards, dict) else {}
+                    group_name = cards.get(str(envelope.group_id)) if envelope.group_id else None
+                    disp = str(group_name or ident.nickname or "").strip()
+                    mentioned_users.append(f"{disp}(QQ:{q})" if disp else f"QQ:{q}")
+                else:
+                    mentioned_users.append(f"QQ:{q}")
+
         messages = self.build_prompt_messages(
             persona,
             memory_ctx,
@@ -866,6 +891,7 @@ class CompanionPipeline:
             image_blocks=image_blocks or None,
             vision_hints=vision_hints or None,
             correction_hints=correction_hints or None,
+            mentioned_users=mentioned_users or None,
         )
 
         # 8. Invoke Main Brain via Model Control Center (with autonomous Tool Calling)

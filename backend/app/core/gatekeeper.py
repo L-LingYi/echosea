@@ -138,9 +138,11 @@ class GatekeeperService:
         # --- Layer 1: Hard Rules (@, Reply, Peer Tracking) ---
         bot_mentioned = envelope.self_qq > 0 and envelope.self_qq in envelope.mentioned_qqs
         other_mentioned = [q for q in envelope.mentioned_qqs if q != envelope.self_qq]
+        matched_alias = self._match_alias(text, all_names)
+        is_direct_alias = bool(matched_alias and self._is_direct_call(text, matched_alias))
 
-        # Record peer-to-peer interaction when user explicitly @s another group member
-        if other_mentioned and not bot_mentioned:
+        # Record peer-to-peer interaction when user explicitly @s another group member (unless addressing bot)
+        if other_mentioned and not bot_mentioned and not replied_to_bot and not is_direct_alias:
             await self.store.clear_user_attention(group_id, envelope.sender_qq)
             for peer_qq in other_mentioned:
                 await self.store.record_peer_interaction(group_id, envelope.sender_qq, peer_qq)
@@ -188,9 +190,8 @@ class GatekeeperService:
             )
 
         # --- Layer 2: Direct Alias Call vs. Third-Person Mention ---
-        matched_alias = self._match_alias(text, all_names)
         if matched_alias:
-            if self._is_direct_call(text, matched_alias):
+            if is_direct_alias:
                 await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
                 await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
                 await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=False)
@@ -375,6 +376,19 @@ class GatekeeperService:
                             reason=reason,
                             should_record_ambient=True,
                         )
+                    if llm_result.get("target") == "bot" and target == "third_person_about_bot" and score >= 0.5:
+                        await self.store.record_user_attention(group_id, envelope.sender_qq, int(self.attention_decay_seconds) + 20)
+                        await self.store.record_group_bot_activity(group_id, ttl_seconds=max(180, int(self.group_topic_warmth_seconds) + 30))
+                        await self.store.record_group_human_message(group_id, envelope.sender_qq, has_hook=False)
+                        await self.store.record_bot_turn(group_id, reset=True)
+                        return GatekeeperDecision(
+                            action="direct_pass",
+                            target="bot",
+                            score=round(max(score, 0.85), 3),
+                            reason=f"Direct alias call confirmed by Gatekeeper: {reason}",
+                            should_record_ambient=True,
+                            suggested_max_chars=160,
+                        )
             except Exception as exc:
                 logger.warning("Gatekeeper LLM scorer failed, using heuristic fallback [%s]: %s", type(exc).__name__, exc)
 
@@ -430,16 +444,16 @@ class GatekeeperService:
         stripped = text.strip()
         if stripped == alias:
             return True
-        # Check third-person cues first
-        has_third_person_cue = any(cue in stripped for cue in THIRD_PERSON_CUES)
-        # Direct vocative at start with punctuation or space or imperative/question
+        has_second_person = "你" in stripped
+        has_third_person_cue = any(cue in stripped for cue in THIRD_PERSON_CUES) and not has_second_person
         escaped = re.escape(alias)
-        if re.match(rf"^{escaped}[\s,，、!！?？~～:：]", stripped):
-            return not has_third_person_cue
-        if re.match(rf"^[@＠]?(喂|诶|哎|哈喽|hello|hi)?[\s,，]*{escaped}", stripped, re.IGNORECASE):
-            if has_third_person_cue:
-                return False
+        # Direct vocative at start with punctuation (e.g. '小呆呆，他怎么称呼' / '小呆呆: 刚才那个')
+        if re.match(rf"^{escaped}\s*[,，、!！?？~～:：]", stripped):
             return True
+        if re.match(rf"^{escaped}\s+", stripped):
+            return not has_third_person_cue
+        if re.match(rf"^[@＠]?(?:喂|诶|哎|哈喽|hello|hi)?[!！?？~～:：、\s,，]*{escaped}", stripped, re.IGNORECASE):
+            return not has_third_person_cue
         # Ends with calling the bot ("...对吧小呆呆", "...在吗小呆呆")
         if re.search(rf"{escaped}[\s?？!！~～]*$", stripped) and not has_third_person_cue:
             return True

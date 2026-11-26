@@ -133,6 +133,7 @@ def build_prompt_messages(
     image_blocks: list[dict[str, Any]] | None = None,
     vision_hints: list[str] | None = None,
     correction_hints: list[str] | None = None,
+    mentioned_users: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Prompt Cache optimized layout:
     1. Static prefix (system prompt + identity + banned phrases + search tool policy) FIRST
@@ -231,6 +232,8 @@ def build_prompt_messages(
             if recent_lines:
                 recent = "\n".join(recent_lines)
                 dynamic_parts.append(f"[近期群聊/私聊上下文（严格按发言人区分，切勿张冠李戴）]\n{recent}")
+    if mentioned_users:
+        dynamic_parts.append(f"[本条消息@提及的群友] {', '.join(mentioned_users)}")
     dynamic_parts.append(
         f"[发言人归属锚点] 下面即将回复的这条消息由「{envelope.display_name}」(QQ:{envelope.sender_qq})发出。"
         "请务必分清上下文中每一位群友各自说的话，不要把别人(例如前一条发言人)的特征或观点错安到当前发言人头上。"
@@ -246,7 +249,15 @@ def build_prompt_messages(
         dynamic_parts.append("【输出协议】直接写聊天正文，不输出语音标签。")
 
     messages.append({"role": "system", "content": "\n\n".join(dynamic_parts)})
-    user_line = f"{envelope.display_name}: {envelope.raw_text}"
+    raw_user_text = (envelope.raw_text or "").strip()
+    if not raw_user_text:
+        if envelope.self_qq and envelope.self_qq in envelope.mentioned_qqs:
+            raw_user_text = f"@{persona.bot_name}（只艾特了你，未附加文字）"
+        elif envelope.media_meta:
+            raw_user_text = "（发送了图片/表情）"
+        else:
+            raw_user_text = "（引用或提醒了你）"
+    user_line = f"{envelope.display_name}: {raw_user_text}"
     if envelope.expanded_reply_text:
         user_line = f"[引用原句: {envelope.expanded_reply_text}]\n{user_line}"
     if image_blocks:
