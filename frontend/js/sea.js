@@ -634,7 +634,7 @@ export function seaResetView() {
   SEA.goalTargetZ = 0;
   SEA.goalYaw = SEA.mode3d ? 0.35 : 0;
   SEA.goalPitch = SEA.mode3d ? 0.28 : 0;
-  SEA.goalDistance = window.innerWidth < 768 ? 760 : 600;
+  SEA.goalDistance = window.innerWidth < 768 ? 720 : 580;
   SEA.autoRotate = SEA.mode3d;
   syncToolbarState();
 }
@@ -736,7 +736,7 @@ function getNeighborSet(nodeId) {
   return set;
 }
 
-function focusNode(node, flyCamera = true) {
+function focusNode(node, rotateToFront = true) {
   if (!node) return;
   SEA.selected = node;
   if (node.layer === 'L4_identity') {
@@ -746,16 +746,19 @@ function focusNode(node, flyCamera = true) {
   } else if (node.id === 'self_core') {
     SEA.focusedPersonId = null;
   }
-  if (flyCamera) {
+  // Always keep camera center locked to self_core (0, 0, 0)
+  SEA.goalTargetX = 0;
+  SEA.goalTargetY = 0;
+  SEA.goalTargetZ = 0;
+  if (rotateToFront) {
     SEA.autoRotate = false;
-    SEA.goalTargetX = node.x;
-    SEA.goalTargetY = node.y;
-    SEA.goalTargetZ = node.z;
-    SEA.goalDistance = node.id === 'self_core' ? 580 : (node.layer === 'L4_identity' ? 370 : 340);
     if (SEA.mode3d && node.id !== 'self_core') {
-      const angle = Math.atan2(node.x, node.z);
-      SEA.goalYaw = angle;
-      SEA.goalPitch = 0.22;
+      // Rotate globe so the selected node faces the viewer while keeping self_core dead-center
+      const horiz = Math.hypot(node.x, node.z);
+      if (horiz > 1) {
+        SEA.goalYaw = Math.atan2(node.x, node.z);
+      }
+      SEA.goalPitch = Math.max(-0.9, Math.min(0.9, Math.atan2(-node.y, Math.max(120, horiz)) * 0.65));
     }
     syncToolbarState();
   }
@@ -1010,17 +1013,47 @@ function buildCompactChipEl(node) {
 function mountSeaCards() {
   const layer = document.getElementById('seaCardLayer');
   if (!layer) return;
-  const frag = document.createDocumentFragment();
-  for (const node of SEA.nodes) {
+  // Clear any legacy cards; we now render a single crisp hover card on demand
+  layer.replaceChildren();
+  SEA._hoverCardNodeId = null;
+  SEA._hoverCardEl = null;
+}
+
+function updateHoverCard(node, proj, stageW, stageH) {
+  const layer = document.getElementById('seaCardLayer');
+  if (!layer) return;
+  if (!node || !proj) {
+    if (SEA._hoverCardEl) {
+      SEA._hoverCardEl.remove();
+      SEA._hoverCardEl = null;
+      SEA._hoverCardNodeId = null;
+    }
+    return;
+  }
+  if (SEA._hoverCardNodeId !== node.id || !SEA._hoverCardEl) {
     let cardEl;
     if (node.layer === 'L4_identity') cardEl = buildPersonCardEl(node);
-    else if (node.layer === 'L3_public_episode' || node.layer === 'L3_private_episode' || node.layer === 'L2_ambient') cardEl = buildMemoryCardEl(node);
-    else if (node.layer === 'L5_self') cardEl = buildCoreCardEl(node);
+    else if (node.layer === 'L3_public_episode' || node.layer === 'L3_private_episode' || node.layer === 'L2_ambient') {
+      cardEl = buildMemoryCardEl(node);
+      cardEl.classList.add('is-expanded');
+    } else if (node.layer === 'L5_self') cardEl = buildCoreCardEl(node);
     else cardEl = buildCompactChipEl(node);
-    node._cardEl = cardEl;
-    frag.appendChild(cardEl);
+    cardEl.classList.add('sea-hover-popover');
+    layer.replaceChildren(cardEl);
+    SEA._hoverCardEl = cardEl;
+    SEA._hoverCardNodeId = node.id;
   }
-  layer.replaceChildren(frag);
+  const card = SEA._hoverCardEl;
+  const cw = card.offsetWidth || 224;
+  const ch = card.offsetHeight || 110;
+  // Position slightly above-right of the glowing orb, clamped within stage bounds
+  let left = proj.sx + 18;
+  let top = proj.sy - ch / 2;
+  if (left + cw > stageW - 16) left = proj.sx - cw - 18;
+  left = Math.max(12, Math.min(stageW - cw - 12, left));
+  top = Math.max(12, Math.min(stageH - ch - 12, top));
+  card.style.transform = `translate3d(${left.toFixed(1)}px, ${top.toFixed(1)}px, 0)`;
+  card.style.zIndex = '2300';
 }
 
 function renderInspector(node) {
@@ -1355,10 +1388,14 @@ function startSeaLoop() {
         ctx.restore();
       }
 
-      // 5. Draw glowing 3D node anchors + sync 3D-projected HTML cards
+      // 5. Draw glowing 3D star orbs + minimal name labels (cards only appear on hover!)
+      const hitList = [];
+      let hoveredEntry = null;
       for (const { node: n, proj: p } of sortedVis) {
         const col = LAYER_COLORS[n.layer] || '#60a5fa';
+        const isCore = n.id === 'self_core';
         const isSel = SEA.selected && SEA.selected.id === n.id;
+        const isHov = SEA.hoveredId === n.id;
         const isMatch = q && (
           (n.label || '').toLowerCase().includes(q)
           || (n.summary || '').toLowerCase().includes(q)
@@ -1366,65 +1403,90 @@ function startSeaLoop() {
         );
         const isFocusRelevant = !SEA.focusedPersonId
           || n.id === SEA.focusedPersonId
+          || isCore
           || (focusedNeighbors && focusedNeighbors.has(n.id));
         const isHoverRelevant = !activeNeighbors || activeNeighbors.has(n.id);
-        const dimmed = (SEA.focusedPersonId && !isFocusRelevant) || (q && !isMatch);
+        const dimmed = (SEA.focusedPersonId && !isFocusRelevant)
+          || (q && !isMatch)
+          || (SEA.hoveredId && !isHoverRelevant);
 
-        // Glowing 3D orb behind card anchor
-        const r = Math.max(4, n.size * 0.42 * p.scale);
-        const glowR = r * (n.id === 'self_core' ? 4.2 : 2.8);
+        const baseR = isCore ? 13 : (n.layer === 'L4_identity' ? 7.5 : (n.layer === 'group' ? 8.5 : 5.6));
+        const r = Math.max(3.5, baseR * p.scale * (isHov ? 1.28 : 1));
+        const glowR = r * (isCore ? 4.4 : (isHov || isSel ? 3.6 : 2.7));
+
+        ctx.save();
+        ctx.globalAlpha = dimmed ? 0.2 : 0.95;
+
+        // Outer radial glow
         const grad = ctx.createRadialGradient(p.sx, p.sy, 0.5, p.sx, p.sy, glowR);
         grad.addColorStop(0, col);
+        grad.addColorStop(0.45, col + '55');
         grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.save();
-        ctx.globalAlpha = dimmed ? 0.2 : 0.85;
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(p.sx, p.sy, glowR, 0, Math.PI * 2);
         ctx.fill();
 
+        // Pulsing sonar ring on center core
+        if (isCore) {
+          const pulse = (SEA.tick * 0.45) % 1;
+          ctx.strokeStyle = `rgba(56,189,248,${(0.45 * (1 - pulse)).toFixed(3)})`;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, r + pulse * 36 * p.scale, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Core star vertex
         ctx.fillStyle = col;
         ctx.beginPath();
         ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
         ctx.fill();
 
-        if (isSel || isMatch) {
+        // Bright specular pinpoint
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.beginPath();
+        ctx.arc(p.sx - r * 0.22, p.sy - r * 0.22, Math.max(1.2, r * 0.34), 0, Math.PI * 2);
+        ctx.fill();
+
+        if (isSel || isHov || isMatch) {
           ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 2;
+          ctx.lineWidth = isHov ? 2.2 : 1.7;
           ctx.beginPath();
-          ctx.arc(p.sx, p.sy, r + 4 + Math.sin(SEA.tick * 4) * 1.5, 0, Math.PI * 2);
+          ctx.arc(p.sx, p.sy, r + 4.5 + Math.sin(SEA.tick * 4) * 1.2, 0, Math.PI * 2);
           ctx.stroke();
         }
+
+        // Crisp vertex name label right above the glowing orb
+        const fontSize = isCore ? 12.5 : Math.max(10, Math.min(13, 11.2 * p.scale));
+        ctx.font = `${isCore || isHov || isSel ? '700' : '500'} ${fontSize.toFixed(1)}px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const rawLbl = n.label || '';
+        const lbl = rawLbl.length > 14 ? `${rawLbl.slice(0, 13)}…` : rawLbl;
+        const ly = p.sy - r - 6;
+        ctx.globalAlpha = dimmed ? 0.18 : (isCore || isHov || isSel ? 1 : Math.max(0.55, Math.min(0.95, p.scale * 0.92)));
+        // Subtle dark text halo for legibility over star lines
+        ctx.strokeStyle = 'rgba(3, 7, 18, 0.85)';
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        ctx.strokeText(lbl, p.sx, ly);
+        ctx.fillStyle = isCore ? '#e0f2fe' : (isHov || isSel ? '#ffffff' : '#e2e8f0');
+        ctx.fillText(lbl, p.sx, ly);
         ctx.restore();
 
-        // Sync projected HTML card
-        const card = n._cardEl;
-        if (card) {
-          const outOfBounds = p.sx < -160 || p.sx > W + 160 || p.sy < -120 || p.sy > H + 120;
-          if (outOfBounds) {
-            card.style.display = 'none';
-          } else {
-            card.style.display = '';
-            const cardScale = Math.max(0.62, Math.min(1.12, p.scale * 0.92));
-            const yOffset = n.layer === 'L5_self' ? 28 : 16;
-            card.style.transform = `translate3d(${p.sx.toFixed(1)}px, ${(p.sy + yOffset * cardScale).toFixed(1)}px, 0) translate(-50%, 0) scale(${cardScale.toFixed(3)})`;
-            card.style.zIndex = String(Math.max(1, Math.round(2000 - p.depth)));
+        hitList.push({ node: n, sx: p.sx, sy: p.sy, r: Math.max(15, r + 9), proj: p });
+        if (isHov) hoveredEntry = { node: n, proj: p };
+      }
 
-            // LOD: expand memory summary cards when their owner is focused, selected, hovered, matched, or zoomed close
-            const isMem = n.layer === 'L3_public_episode' || n.layer === 'L3_private_episode' || n.layer === 'L2_ambient';
-            const expandMem = isMem && (
-              isSel
-              || SEA.hoveredId === n.id
-              || isMatch
-              || (SEA.focusedPersonId && n._ownerId === SEA.focusedPersonId)
-              || p.scale > 1.22
-            );
-            card.classList.toggle('is-expanded', Boolean(expandMem));
-            card.classList.toggle('is-selected', Boolean(isSel));
-            card.classList.toggle('is-match', Boolean(isMatch));
-            card.classList.toggle('is-dimmed', Boolean(dimmed || (!isHoverRelevant && SEA.hoveredId)));
-          }
-        }
+      // Store front-to-back hit targets for pointer hover/click
+      SEA._hitTargets = hitList.reverse();
+
+      // Show floating detail card ONLY for the hovered vertex
+      if (hoveredEntry && !SEA.pointerMode) {
+        updateHoverCard(hoveredEntry.node, hoveredEntry.proj, W, H);
+      } else {
+        updateHoverCard(null, null, W, H);
       }
     }
     SEA.raf = requestAnimationFrame(step);
@@ -1527,6 +1589,18 @@ export function initSeaControls() {
   const canvas = document.getElementById('seaCanvas');
   if (!canvas) return;
 
+  const hitTestScreen = (clientX, clientY) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    for (const item of (SEA._hitTargets || [])) {
+      if (Math.hypot(x - item.sx, y - item.sy) <= item.r) {
+        return item.node;
+      }
+    }
+    return null;
+  };
+
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 
   canvas.addEventListener('pointerdown', e => {
@@ -1534,37 +1608,52 @@ export function initSeaControls() {
     SEA.lastX = e.clientX;
     SEA.lastY = e.clientY;
     SEA.moved = false;
-    SEA.pointerMode = (!SEA.mode3d || e.button === 2 || e.shiftKey) ? 'pan' : 'orbit';
+    SEA.downHit = hitTestScreen(e.clientX, e.clientY);
+    SEA.pointerMode = 'orbit';
     SEA.autoRotate = false;
     syncToolbarState();
   });
 
   canvas.addEventListener('pointermove', e => {
-    if (!SEA.pointerMode) return;
-    const dx = e.clientX - SEA.lastX;
-    const dy = e.clientY - SEA.lastY;
-    if (Math.hypot(dx, dy) > 3) SEA.moved = true;
-    SEA.lastX = e.clientX;
-    SEA.lastY = e.clientY;
+    if (SEA.pointerMode) {
+      const dx = e.clientX - SEA.lastX;
+      const dy = e.clientY - SEA.lastY;
+      if (Math.hypot(dx, dy) > 3) SEA.moved = true;
+      SEA.lastX = e.clientX;
+      SEA.lastY = e.clientY;
 
-    if (SEA.pointerMode === 'orbit') {
-      SEA.goalYaw -= dx * 0.0065;
-      SEA.goalPitch = Math.max(-1.22, Math.min(1.22, SEA.goalPitch + dy * 0.0055));
-    } else {
-      const panSpeed = SEA.distance / 560;
-      const cosY = Math.cos(SEA.yaw);
-      const sinY = Math.sin(SEA.yaw);
-      SEA.goalTargetX -= (dx * cosY) * panSpeed;
-      SEA.goalTargetZ += (dx * sinY) * panSpeed;
-      SEA.goalTargetY -= dy * panSpeed;
+      // Center stays locked to self_core (0,0,0); dragging rotates the 3D galaxy smoothly
+      SEA.goalTargetX = 0;
+      SEA.goalTargetY = 0;
+      SEA.goalTargetZ = 0;
+      if (SEA.mode3d) {
+        SEA.goalYaw -= dx * 0.0065;
+        SEA.goalPitch = Math.max(-1.22, Math.min(1.22, SEA.goalPitch + dy * 0.0055));
+      } else {
+        SEA.goalYaw -= dx * 0.005;
+      }
+      return;
     }
+    const hit = hitTestScreen(e.clientX, e.clientY);
+    SEA.hoveredId = hit ? hit.id : null;
+    canvas.style.cursor = hit ? 'pointer' : 'grab';
   });
 
-  canvas.addEventListener('pointerup', () => {
-    if (!SEA.moved && SEA.focusedPersonId) {
-      // Clicking empty space clears spotlight focus gently
-      SEA.focusedPersonId = null;
+  canvas.addEventListener('pointerleave', () => {
+    SEA.hoveredId = null;
+    canvas.style.cursor = 'grab';
+  });
+
+  canvas.addEventListener('pointerup', e => {
+    if (!SEA.moved) {
+      const hit = SEA.downHit || hitTestScreen(e.clientX, e.clientY);
+      if (hit) {
+        focusNode(hit, true);
+      } else if (SEA.focusedPersonId) {
+        SEA.focusedPersonId = null;
+      }
     }
+    SEA.downHit = null;
     SEA.pointerMode = null;
   });
 

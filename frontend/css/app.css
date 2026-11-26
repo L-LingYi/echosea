@@ -351,9 +351,13 @@ tbody tr:hover { background: #f8fafc; }
 }
 .sea-card {
   position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer;
-  transform-origin: center top; will-change: transform, opacity;
-  transition: opacity .22s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
+  transform-origin: left top; will-change: transform, opacity;
+  transition: opacity .16s ease, border-color .16s ease, box-shadow .16s ease;
   user-select: none;
+}
+.sea-hover-popover {
+  pointer-events: none !important;
+  box-shadow: 0 18px 44px rgba(2, 6, 23, .76), 0 0 0 1px rgba(56, 189, 248, .32) !important;
 }
 .sea-card.is-dimmed { opacity: .24; }
 .sea-card.is-dimmed:hover { opacity: .88; }
