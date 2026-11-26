@@ -578,14 +578,16 @@ def trigger_self_restart() -> None:
     threading.Thread(target=_exit_soon, daemon=True).start()
 
 
-def health(revision: str, seconds: int = 45) -> bool:
+def health(revision: str, seconds: int = 45, allow_empty_commit: bool = False) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(f"{CORE_URL}/healthz", timeout=2) as response:
                 state = json.loads(response.read(8192))
-            if state.get("status") == "ok" and state.get("commit") == revision:
-                return True
+            if state.get("status") == "ok":
+                reported = str(state.get("commit") or "").strip()
+                if reported == revision or (allow_empty_commit and not reported):
+                    return True
         except (OSError, ValueError):
             pass
         time.sleep(1)
@@ -681,7 +683,7 @@ def upgrade(job: dict, target: str, confirm_token: str = "") -> None:
         previous = inspection["from_commit"]
         commit = inspection["to_commit"]
         job.update(from_commit=previous, to_commit=commit)
-        if not health(previous, 6):
+        if not health(previous, 6, allow_empty_commit=True):
             raise ValueError("当前运行版本与部署仓库不一致，或 Core 未就绪")
         if previous == commit:
             job.update(status="succeeded", log_summary="已是最新提交，Core 未重建。")

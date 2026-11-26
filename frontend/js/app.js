@@ -36,6 +36,7 @@ import {
   loadOps,
   openAliyunOAuth,
   restoreSnapshot,
+  resumeUpdatePollingIfNeeded,
   runReflection,
   setupTotp,
   testBackupConn,
@@ -65,6 +66,7 @@ function enterApp(username) {
   document.getElementById('appView').classList.remove('hidden');
   document.getElementById('userInfo').textContent = `管理员：${username}`;
   switchTab('dashboard');
+  resumeUpdatePollingIfNeeded();
 }
 
 function refreshCurrentTab() {

@@ -74,7 +74,7 @@ def test_failed_candidate_restores_old_image_without_rebuilding_it(updater, monk
     monkeypatch.setattr(updater, "candidate", lambda target: (previous, candidate))
     monkeypatch.setattr(updater, "git", git)
     monkeypatch.setattr(updater, "compose", compose)
-    monkeypatch.setattr(updater, "health", lambda revision, seconds=45: revision == previous)
+    monkeypatch.setattr(updater, "health", lambda revision, seconds=45, allow_empty_commit=False: revision == previous)
     monkeypatch.setattr(updater, "backup_database", lambda _: None)
     monkeypatch.setattr(updater, "active_container", lambda: (active_image[0], "core:latest"))
     monkeypatch.setattr(updater, "run", lambda *args: commands.append(args))
@@ -142,7 +142,7 @@ def test_tier2_confirmation_token_single_use_and_inspect(updater, monkeypatch, t
     monkeypatch.setattr(updater, "candidate", lambda target="": (previous, commit))
     monkeypatch.setattr(updater, "git", fake_git)
     monkeypatch.setattr(updater, "git_optional", lambda *args: 'app_version: str = "1.8.2"' if "config.py" in str(args) else "")
-    monkeypatch.setattr(updater, "health", lambda revision, seconds=45: True)
+    monkeypatch.setattr(updater, "health", lambda revision, seconds=45, allow_empty_commit=False: True)
 
     # 1. /inspect endpoint returns Tier 2 diff & sha256
     with updater.ThreadingHTTPServer(("127.0.0.1", 0), updater.Handler) as server:
@@ -233,3 +233,28 @@ def test_updater_self_update_syntax_check_backup_and_restart(updater, monkeypatc
     monkeypatch.setattr(updater, "trigger_self_restart", lambda: restarted.append(True))
     updater.trigger_self_restart()
     assert restarted == [True]
+
+
+def test_health_allows_empty_commit_only_on_preflight(updater, monkeypatch):
+    class _FakeResp:
+        def __init__(self, payload):
+            self._data = json.dumps(payload).encode("utf-8")
+
+        def read(self, _n=-1):
+            return self._data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    # Manually restarted container without APP_GIT_COMMIT -> /healthz omits "commit"
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *a, **k: _FakeResp({"status": "ok", "version": "1.9.2"}))
+    assert updater.health("a" * 40, seconds=1, allow_empty_commit=True) is True
+    assert updater.health("a" * 40, seconds=1, allow_empty_commit=False) is False
+
+    # Mismatched non-empty commit is still rejected even when allow_empty_commit=True
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *a, **k: _FakeResp({"status": "ok", "commit": "c" * 40}))
+    assert updater.health("a" * 40, seconds=1, allow_empty_commit=True) is False
+    assert updater.health("c" * 40, seconds=1, allow_empty_commit=False) is True

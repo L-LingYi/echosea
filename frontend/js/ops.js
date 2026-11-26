@@ -4,6 +4,90 @@ let LAST_CHECKED_REF = '';
 let LAST_INSPECTION = null;
 let UPD_TOTP_ENABLED = false;
 let PENDING_CONFIRM_CTX = null;
+const ACTIVE_UPDATE_STORAGE_KEY = 'echosea_active_update_job';
+let UPDATE_POLL_TIMER = null;
+let UPDATE_RELOAD_SCHEDULED = false;
+
+function _getSavedUpdateJob() {
+  try {
+    return sessionStorage.getItem(ACTIVE_UPDATE_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function _setSavedUpdateJob(jobUid) {
+  try {
+    if (jobUid) sessionStorage.setItem(ACTIVE_UPDATE_STORAGE_KEY, jobUid);
+    else sessionStorage.removeItem(ACTIVE_UPDATE_STORAGE_KEY);
+  } catch {
+    // Ignore storage restriction
+  }
+}
+
+function _setUpdateBanner(text) {
+  const msg = document.getElementById('updateCheckMessage');
+  if (msg) msg.textContent = text;
+}
+
+export function stopUpdatePolling(clearStorage = false) {
+  if (UPDATE_POLL_TIMER) {
+    clearTimeout(UPDATE_POLL_TIMER);
+    UPDATE_POLL_TIMER = null;
+  }
+  if (clearStorage) _setSavedUpdateJob('');
+}
+
+export function startUpdatePolling(jobUid) {
+  if (!jobUid) return;
+  _setSavedUpdateJob(jobUid);
+  stopUpdatePolling(false);
+  _setUpdateBanner(`⏳ 更新任务 ${jobUid} 正在后台执行（刷新或关闭页面均不会中断更新），完成后将自动刷新页面...`);
+
+  const tick = async () => {
+    try {
+      const upd = await api('/api/system/update/status');
+      const job = (upd.jobs || []).find(j => j.job_uid === jobUid);
+      if (!job || job.status === 'running' || job.status === 'pending') {
+        _setUpdateBanner(`⏳ 更新任务 ${jobUid} 正在后台构建与重启（刷新页面不会中断），完成后将自动刷新...`);
+        UPDATE_POLL_TIMER = setTimeout(tick, 3000);
+        return;
+      }
+      stopUpdatePolling(true);
+      if (job.status === 'succeeded') {
+        if (!UPDATE_RELOAD_SCHEDULED) {
+          UPDATE_RELOAD_SCHEDULED = true;
+          const ver = (job.to_commit || '').slice(0, 12) || '最新版本';
+          _setUpdateBanner(`✅ 更新任务 ${jobUid} 已完成（${ver}），即将自动刷新页面...`);
+          toast('系统更新已完成，即将自动刷新页面加载新版本...');
+          setTimeout(() => window.location.reload(), 1800);
+        }
+        return;
+      }
+      const summary = job.log_summary || labelOf(STATUS_LABELS, job.status);
+      _setUpdateBanner(`⚠️ 更新任务 ${jobUid} 状态：${labelOf(STATUS_LABELS, job.status)}（${summary}）`);
+      toast(`更新结束：${labelOf(STATUS_LABELS, job.status)}`);
+      loadOps().catch(() => {});
+    } catch (err) {
+      if (err && err.message === 'Unauthorized') {
+        stopUpdatePolling(false);
+        return;
+      }
+      // During container restart, 502/503/network errors are expected — keep polling silently
+      _setUpdateBanner(`⏳ 更新任务 ${jobUid} 进行中：Core 正在重启切换新版本，等待恢复后自动刷新页面...`);
+      UPDATE_POLL_TIMER = setTimeout(tick, 3000);
+    }
+  };
+
+  UPDATE_POLL_TIMER = setTimeout(tick, 2500);
+}
+
+export function resumeUpdatePollingIfNeeded() {
+  const saved = _getSavedUpdateJob();
+  if (saved && !UPDATE_POLL_TIMER) {
+    startUpdatePolling(saved);
+  }
+}
 
 export function closeUpdateConfirmModal() {
   const modal = document.getElementById('updateConfirmModal');
@@ -218,6 +302,24 @@ export async function loadOps() {
       }),
     );
   }
+
+  const runningJob = jobs.find(j => j.status === 'running' || j.status === 'pending');
+  if (runningJob) {
+    if (!UPDATE_POLL_TIMER) startUpdatePolling(runningJob.job_uid);
+  } else {
+    const savedUid = _getSavedUpdateJob();
+    if (savedUid) {
+      const doneJob = jobs.find(j => j.job_uid === savedUid);
+      if (doneJob && doneJob.status === 'succeeded' && !UPDATE_RELOAD_SCHEDULED) {
+        stopUpdatePolling(true);
+        UPDATE_RELOAD_SCHEDULED = true;
+        toast('系统更新已完成，即将自动刷新页面加载新版本...');
+        setTimeout(() => window.location.reload(), 1500);
+      } else if (doneJob) {
+        stopUpdatePolling(true);
+      }
+    }
+  }
 }
 
 export async function checkSystemUpdate() {
@@ -281,7 +383,10 @@ export async function triggerSystemUpdate() {
   document.getElementById('updateTrigger').disabled = true;
   try {
     const result = await api('/api/system/update/trigger', { method: 'POST', body: JSON.stringify({ target_ref: target }) });
-    toast(`更新任务 ${result.job_uid} (${result.status})`);
+    toast(`更新任务 ${result.job_uid} 已在后台启动，完成后将自动刷新页面`);
+    if (result.status === 'running' || result.status === 'pending') {
+      startUpdatePolling(result.job_uid);
+    }
     await loadOps();
   } catch (err) {
     toast(err.message);
@@ -465,7 +570,10 @@ export function initOpsForms(onLogout) {
         LAST_INSPECTION = null;
         const trigBtn = document.getElementById('updateTrigger');
         if (trigBtn) trigBtn.disabled = true;
-        toast(`已通过二次验证，更新任务 ${trig.job_uid} 已提交`);
+        toast(`已通过二次验证，更新任务 ${trig.job_uid} 已在后台启动，完成后将自动刷新页面`);
+        if (trig.status === 'running' || trig.status === 'pending') {
+          startUpdatePolling(trig.job_uid);
+        }
         await loadOps();
       } catch (err) {
         toast(err.message);
