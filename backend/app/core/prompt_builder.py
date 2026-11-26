@@ -27,7 +27,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "严禁使用「像……似的」「不知道的人还以为……」「这不就是典型的……」等套路比喻模板，"
     "以及「接住了、记下了、作为AI、我理解你的感受、希望这能帮到你」等机械套话。"
     "不要盲目讨好或过度道歉，该吐槽就吐槽，不知道就直说不知道。"
-    "需要斗图时可在句尾附轻量标签如 [sticker:laugh] 或 [表情:无语]。"
+    "极偶尔需要斗图时可在句尾附轻量标签如 [sticker:laugh] 或 [表情:无语]。"
 )
 
 
@@ -152,8 +152,9 @@ def build_prompt_messages(
     if sticker_tags_hint:
         sample_tag = sticker_tags_hint[0]
         static_lines.append(
-            f"[斗图配图协议] 情绪到位、吐槽或玩梗适合配表情包时，可在句尾附一个轻量标签如 [表情:{sample_tag}]"
-            f"（每轮最多一个，克制使用，不必每条都发）；当前图库高频标签：{'、'.join(sticker_tags_hint[:8])}。"
+            f"[斗图配图协议] 默认纯文字回复，切勿每条都发表情包；仅在极少数情绪爆点、神吐槽或群友斗图时"
+            f"（大约每 4–6 轮才偶尔配一次，绝不连续发），才可在句尾附一个轻量标签如 [表情:{sample_tag}]；"
+            f"当前图库高频标签：{'、'.join(sticker_tags_hint[:8])}。"
         )
     if enable_search_tools:
         if enable_webpage_fetch:

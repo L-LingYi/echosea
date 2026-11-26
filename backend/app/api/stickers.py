@@ -143,6 +143,7 @@ async def review_sticker(
     body: dict[str, Any],
     _admin=Depends(get_current_admin),
     session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
 ):
     asset = await session.get(StickerAsset, sticker_id)
     if asset is None:
@@ -153,6 +154,8 @@ async def review_sticker(
         asset.emotion_tags = body["emotion_tags"]
     if "context_hint" in body:
         asset.context_hint = str(body["context_hint"])
+    if getattr(runtime, "sticker_service", None) is not None:
+        runtime.sticker_service.invalidate_tag_cache()
     return {"ok": True, "id": asset.id, "status": asset.status}
 
 
@@ -161,11 +164,24 @@ async def delete_sticker(
     sticker_id: int,
     _admin=Depends(get_current_admin),
     session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
 ):
     asset = await session.get(StickerAsset, sticker_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Sticker not found")
+    file_path = (asset.file_path or "").strip()
     await session.delete(asset)
+    svc = getattr(runtime, "sticker_service", None)
+    if svc is not None:
+        svc.invalidate_tag_cache()
+        if file_path:
+            try:
+                base_dir = Path(svc.storage_dir).resolve()
+                target = Path(file_path).resolve()
+                if target.is_relative_to(base_dir) and target.is_file():
+                    target.unlink(missing_ok=True)
+            except OSError:
+                pass
     return {"ok": True}
 
 

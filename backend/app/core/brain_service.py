@@ -132,6 +132,8 @@ class CompanionPipeline:
         debounce_max_wait_seconds: float = 6.0,
         bubble_delay_min_seconds: float = 0.0,
         bubble_delay_max_seconds: float = 0.0,
+        sticker_cooldown_seconds: float = 180.0,
+        sticker_min_reply_gap: int = 3,
         enable_background_image_caption: bool = True,
         session_factory: Any = None,
     ) -> None:
@@ -165,6 +167,8 @@ class CompanionPipeline:
         )
         self.bubble_delay_min_seconds = max(0.0, float(bubble_delay_min_seconds))
         self.bubble_delay_max_seconds = max(self.bubble_delay_min_seconds, float(bubble_delay_max_seconds))
+        self.sticker_cooldown_seconds = max(0.0, float(sticker_cooldown_seconds))
+        self.sticker_min_reply_gap = max(0, int(sticker_min_reply_gap))
         self.enable_background_image_caption = bool(enable_background_image_caption)
         self._session_factory = session_factory
         self._group_msg_counters: dict[int, int] = {}
@@ -206,6 +210,20 @@ class CompanionPipeline:
             return 0.0
         base = 0.55 + len(bubble_text.strip()) * 0.04 + random.uniform(0.0, 0.25)
         return max(self.bubble_delay_min_seconds, min(self.bubble_delay_max_seconds, base))
+
+    async def _can_send_sticker(self, scope: str) -> tuple[bool, str]:
+        if self.sticker_cooldown_seconds <= 0.0 and self.sticker_min_reply_gap <= 0:
+            return True, "disabled"
+        state = await self.store.get_sticker_throttle_state(scope)
+        if "last_sent_ts" not in state:
+            return True, "first"
+        elapsed = max(0.0, time.time() - float(state["last_sent_ts"]))
+        replies_since = int(state.get("replies_since", 0))
+        if self.sticker_cooldown_seconds > 0.0 and elapsed < self.sticker_cooldown_seconds:
+            return False, f"cooldown:{int(elapsed)}s<{int(self.sticker_cooldown_seconds)}s"
+        if self.sticker_min_reply_gap > 0 and replies_since < self.sticker_min_reply_gap:
+            return False, f"reply_gap:{replies_since}<{self.sticker_min_reply_gap}"
+        return True, "ok"
 
     async def drain_background_tasks(self, timeout: float = 3.0) -> None:
         pending = [t for t in self._bg_tasks if not t.done()]
@@ -467,6 +485,7 @@ class CompanionPipeline:
 
             phash, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
             if img_bytes is not None:
+                is_gif = url.lower().endswith(".gif") or img_bytes.startswith((b"GIF87a", b"GIF89a"))
                 res = await self.multimodal_service.lookup_or_prepare(session, img_bytes, source_url=url, is_gif=is_gif)
                 if res.get("cache_hit") and res.get("description"):
                     vision_hints.append(str(res["description"]))
@@ -1278,31 +1297,45 @@ class CompanionPipeline:
         if not sent_bubbles and cancelled_stale:
             return {"handled": "aborted_stale_generation", "request_id": request_id, "decision": decision.model_dump()}
 
+        sticker_scope = (
+            f"group:{envelope.group_id}"
+            if (envelope.scene == "group" and envelope.group_id is not None)
+            else f"private:{target_id or envelope.sender_qq}"
+        )
         sent_sticker = None
         if not cancelled_stale and sticker_tags and self.sticker_service is not None:
-            asset = await self.sticker_service.pick_sticker_for_tag(session, sticker_tags[0])
-            if asset and (asset.source_url or asset.file_path):
-                from pathlib import Path as _Path
+            allowed, throttle_reason = await self._can_send_sticker(sticker_scope)
+            if not allowed:
+                logger.info("Sticker suppressed for %s (%s): tag=%s", sticker_scope, throttle_reason, sticker_tags[0])
+            else:
+                asset = await self.sticker_service.pick_sticker_for_tag(session, sticker_tags[0])
+                if asset and (asset.source_url or asset.file_path):
+                    from pathlib import Path as _Path
 
-                src_url = (asset.source_url or "").strip()
-                local_path = (asset.file_path or "").strip()
-                is_ephemeral_qq_url = any(
-                    host in src_url.lower()
-                    for host in ("multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn")
-                )
-                if local_path and _Path(local_path).is_file() and (not src_url or is_ephemeral_qq_url):
-                    sticker_source = local_path
-                else:
-                    sticker_source = src_url or local_path
-                stk_out = await self.adapter.send_sticker(
-                    session,
-                    envelope.scene,
-                    target_id or envelope.sender_qq,
-                    sticker_source,
-                )
-                stk_out.request_id = request_id
-                stk_out.feedback_status = "none"
-                sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
+                    src_url = (asset.source_url or "").strip()
+                    local_path = (asset.file_path or "").strip()
+                    is_ephemeral_qq_url = any(
+                        host in src_url.lower()
+                        for host in ("multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn")
+                    )
+                    if local_path and _Path(local_path).is_file() and (not src_url or is_ephemeral_qq_url):
+                        sticker_source = local_path
+                    else:
+                        sticker_source = src_url or local_path
+                    stk_out = await self.adapter.send_sticker(
+                        session,
+                        envelope.scene,
+                        target_id or envelope.sender_qq,
+                        sticker_source,
+                    )
+                    stk_out.request_id = request_id
+                    stk_out.feedback_status = "none"
+                    if stk_out.status == "sent":
+                        sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
+                        await self.store.record_sticker_sent(sticker_scope)
+
+        if sent_sticker is None and sent_bubbles:
+            await self.store.record_reply_without_sticker(sticker_scope)
 
         if decision.action == "direct_pass":
             speaker_ident = await session.get(QQIdentity, envelope.sender_qq)
@@ -1422,8 +1455,9 @@ class CompanionPipeline:
                 _, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
                 if img_bytes is None:
                     continue
+                is_gif = url.lower().endswith(".gif") or img_bytes.startswith((b"GIF87a", b"GIF89a"))
                 prep = await self.multimodal_service.lookup_or_prepare(
-                    s, img_bytes, source_url=url, is_gif=url.lower().endswith(".gif")
+                    s, img_bytes, source_url=url, is_gif=is_gif
                 )
                 if prep.get("cache_hit") and prep.get("description"):
                     continue
@@ -1442,10 +1476,11 @@ class CompanionPipeline:
                             {"role": "user", "content": [block]},
                         ],
                         temperature=0.2,
-                        max_tokens=60,
+                        max_tokens=120,
                         source="vision_caption",
+                        disable_thinking=True,
                     )
-                    summary = (comp.content or "").strip().splitlines()[0][:80]
+                    summary = ((comp.content or "").strip().splitlines() or [""])[0][:80]
                     if summary:
                         await self.multimodal_service.save_vision_description(s, str(prep["phash"]), summary)
                         captioned += 1

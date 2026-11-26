@@ -29,6 +29,20 @@ class CompanionPlugin(ABC):
         """Subscribe handlers onto the central PluginEventBus."""
 
 
+def _is_sticker_candidate(item: Any) -> bool:
+    """Filter out explicit regular photos/screenshots (sub_type=0) while accepting mface & stickers."""
+    if not isinstance(item, dict) or item.get("type") not in ("image", "mface") or not item.get("url"):
+        return False
+    if item.get("type") == "mface":
+        return True
+    sub_type = item.get("sub_type", item.get("subType"))
+    if sub_type is not None and str(sub_type).strip() != "":
+        summary = str(item.get("summary") or "")
+        fname = str(item.get("file") or "").lower()
+        return str(sub_type).strip() == "1" or "表情" in summary or fname.endswith(".gif")
+    return True
+
+
 class AutoStickerReactionPlugin(CompanionPlugin):
     """Monitors group reactions after images to automatically steal high-heat stickers."""
 
@@ -78,7 +92,7 @@ class AutoStickerReactionPlugin(CompanionPlugin):
                 )
                 surrounding = [f"{r[0]}: {r[1]}" for r in reversed(recent_rows) if r[1]]
                 for item in media:
-                    if item.get("type") in ("image", "mface") and item.get("url"):
+                    if _is_sticker_candidate(item):
                         fetcher = getattr(getattr(runtime, "multimodal_service", None), "image_fetcher", None)
                         phash, img_bytes = await resolve_image_phash(str(item["url"]), timeout=2.5, fetcher=fetcher)
                         asset = await runtime.sticker_service.observe_group_image(

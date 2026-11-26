@@ -225,6 +225,30 @@ class StateStore:
         data = await self.get_json(f"bot_turns:{group_id}")
         return int(data.get("count", 0)) if data else 0
 
+    # --- Sticker send throttling (cooldown + min non-sticker reply gap) ---
+    async def get_sticker_throttle_state(self, scope: str) -> dict[str, Any]:
+        data = await self.get_json(f"sticker_throttle:{scope}")
+        return data if isinstance(data, dict) else {}
+
+    async def record_sticker_sent(self, scope: str) -> None:
+        await self.set_json(
+            f"sticker_throttle:{scope}",
+            {"last_sent_ts": time.time(), "replies_since": 0},
+            ttl_seconds=86400,
+        )
+
+    async def record_reply_without_sticker(self, scope: str) -> int:
+        state = await self.get_sticker_throttle_state(scope)
+        if "last_sent_ts" not in state:
+            return 0
+        replies_since = int(state.get("replies_since", 0)) + 1
+        await self.set_json(
+            f"sticker_throttle:{scope}",
+            {"last_sent_ts": state["last_sent_ts"], "replies_since": replies_since},
+            ttl_seconds=86400,
+        )
+        return replies_since
+
 
 class MessageDebouncer:
     """2.0-2.5s debounce window per (scene, group_id, sender_qq) with max_wait cap to merge burst messages."""

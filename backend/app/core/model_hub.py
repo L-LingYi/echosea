@@ -331,6 +331,13 @@ class ModelHubService:
                     msg = choices[0].get("message", {}) or {}
                     raw_message = dict(msg)
                     content = msg.get("content") or ""
+                    if not content.strip() and msg.get("reasoning_content"):
+                        logger.warning(
+                            "Provider '%s' returned empty content with reasoning_content (max_tokens=%d, completion_tokens=%d)",
+                            provider.name,
+                            max_tokens,
+                            completion_tokens,
+                        )
                     if isinstance(msg.get("tool_calls"), list):
                         tool_calls = [tc for tc in msg["tool_calls"] if isinstance(tc, dict)]
 
@@ -641,7 +648,9 @@ class ModelHubService:
                 res = await self._http_caller(provider, api_key, [{"role": "user", "content": "ping"}], 0.0, 16)
                 reply = res.get("choices", [{}])[0].get("message", {}).get("content", "ok")
             else:
-                res = await self._call_openai_compatible(provider, api_key, [{"role": "user", "content": "Reply OK"}], 0.0, 16)
+                res = await self._call_openai_compatible(
+                    provider, api_key, [{"role": "user", "content": "Reply OK"}], 0.0, 16, disable_thinking=True
+                )
                 reply = res.get("choices", [{}])[0].get("message", {}).get("content", "OK")
 
             ms = int((time.perf_counter() - t0) * 1000)
@@ -738,6 +747,7 @@ class ModelHubService:
         if disable_thinking and "thinking" not in payload and "reasoning_effort" not in payload:
             if "deepseek" in provider.model_name.lower() or "qwen" in provider.model_name.lower():
                 payload["thinking"] = {"type": "disabled"}
+                payload["reasoning_effort"] = "none"
 
         endpoint = urlsplit(url)
         if endpoint.scheme == "https" and endpoint.hostname == "opencode.ai" and endpoint.path.startswith(

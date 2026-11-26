@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from sqlalchemy import String, cast, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.multimodal_service import compute_dhash, deterministic_url_hash, hamming_distance
-from app.models.db import StickerAsset
+from app.models.db import ImageVisionCache, StickerAsset
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,28 @@ class StickerService:
         self.storage_dir = Path(storage_dir)
         self.auto_approve_threshold = auto_approve_threshold
         self._recent_group_sticker: dict[int, str] = {}  # group_id -> last seen phash
+        self._recent_picked_ids: deque[int] = deque(maxlen=12)
         self._cached_top_tags: list[str] = []
         self._cached_top_tags_at: float = 0.0
+
+    def invalidate_tag_cache(self) -> None:
+        """Clear cached top approved tags after sticker review, import, or deletion."""
+        self._cached_top_tags = []
+        self._cached_top_tags_at = 0.0
+
+    def _write_local_sticker(self, computed_hash: str, image_bytes: bytes) -> str:
+        """Persist sticker bytes to local storage safely; never abort DB stealing on filesystem errors."""
+        if not image_bytes:
+            return ""
+        safe_name = "".join(ch for ch in (computed_hash or "") if ch.isalnum() or ch in ("_", "-"))[:64] or "sticker"
+        try:
+            self.storage_dir.mkdir(parents=True, exist_ok=True)
+            dest = self.storage_dir / f"{safe_name}.bin"
+            dest.write_bytes(image_bytes)
+            return str(dest)
+        except OSError as exc:
+            logger.warning("Failed to persist sticker cache to %s: %s", self.storage_dir, exc)
+            return ""
 
     async def get_top_approved_tags(self, session: AsyncSession, limit: int = 8, ttl_seconds: float = 600.0) -> list[str]:
         """Return top emotion tags among approved stickers, cached in memory to avoid per-turn DB load."""
@@ -111,6 +132,12 @@ class StickerService:
 
         if match is not None:
             match.appearance_count += 1
+            if source_url:
+                match.source_url = source_url
+            if image_bytes and (not match.file_path or not Path(match.file_path).is_file()):
+                saved_path = self._write_local_sticker(match.phash, image_bytes)
+                if saved_path:
+                    match.file_path = saved_path
             if emotion_tags:
                 merged = list(dict.fromkeys([*(match.emotion_tags or []), *emotion_tags]))
                 match.emotion_tags = merged
@@ -119,16 +146,12 @@ class StickerService:
                 or match.positive_reactions >= 2
             ):
                 match.status = "approved"
+                self.invalidate_tag_cache()
             self._recent_group_sticker[group_id] = match.phash
             await session.flush()
             return match
 
-        file_path = ""
-        if image_bytes:
-            self.storage_dir.mkdir(parents=True, exist_ok=True)
-            dest = self.storage_dir / f"{computed_hash}.bin"
-            dest.write_bytes(image_bytes)
-            file_path = str(dest)
+        file_path = self._write_local_sticker(computed_hash, image_bytes) if image_bytes else ""
 
         asset = StickerAsset(
             phash=computed_hash,
@@ -166,6 +189,7 @@ class StickerService:
         asset.positive_reactions += 1
         if asset.status == "pending" and asset.positive_reactions >= 2:
             asset.status = "approved"
+            self.invalidate_tag_cache()
         await session.flush()
         return asset
 
@@ -199,6 +223,8 @@ class StickerService:
             session.add(asset)
             created.append(asset)
         await session.flush()
+        if created:
+            self.invalidate_tag_cache()
         return created
 
     async def pick_sticker_for_tag(self, session: AsyncSession, tag: str) -> StickerAsset | None:
@@ -251,7 +277,12 @@ class StickerService:
             ]
 
         if matched:
-            return random.choice(matched[: min(8, len(matched))])
+            fresh_pool = [m for m in matched[: min(8, len(matched))] if m.id not in self._recent_picked_ids]
+            pool = fresh_pool or matched[: min(8, len(matched))]
+            picked = random.choice(pool)
+            if picked.id is not None:
+                self._recent_picked_ids.append(picked.id)
+            return picked
 
         if clean_tag.lower() in ("斗图", "fun", "general"):
             fallback_stmt = (
@@ -261,7 +292,13 @@ class StickerService:
                 .limit(10)
             )
             fallback_rows = list((await session.execute(fallback_stmt)).scalars().all())
-            return random.choice(fallback_rows) if fallback_rows else None
+            if not fallback_rows:
+                return None
+            fresh_fb = [m for m in fallback_rows if m.id not in self._recent_picked_ids]
+            picked = random.choice(fresh_fb or fallback_rows)
+            if picked.id is not None:
+                self._recent_picked_ids.append(picked.id)
+            return picked
         return None
 
 
@@ -271,25 +308,40 @@ class StickerService:
         asset: StickerAsset,
         surrounding_messages: list[str],
         model_hub: Any = None,
+        vision_description: str = "",
     ) -> StickerAsset:
         """Understand & auto-tag a collected sticker using surrounding group chat context (when & why members use it)."""
         context_blob = "\n".join(m for m in surrounding_messages[-6:] if m.strip())
+        vis_desc = (vision_description or "").strip()
+        if not vis_desc and asset.phash:
+            cached_vis = (
+                await session.execute(
+                    select(ImageVisionCache.description).where(ImageVisionCache.phash == asset.phash).limit(1)
+                )
+            ).scalar_one_or_none()
+            if cached_vis:
+                vis_desc = str(cached_vis).strip()
         # 1. Try LLM understanding via reflection slot if available
-        if model_hub is not None and context_blob:
+        if model_hub is not None and (context_blob or vis_desc):
             import json as _json
-            prompt = (
-                "根据下面群友发表情包前后的聊天上下文，总结这张表情包的适用情绪标签(2-4个简短中文词)和你对它使用场景的理解(30字以内)。\n"
-                '仅输出 JSON：{"emotion_tags":["无语","吐槽"],"context_hint":"群友遇到离谱或踩坑时用来表达崩溃无语"}\n\n'
-                f"上下文：\n{context_blob}"
-            )
+            prompt_parts = [
+                "根据下面表情包的画面内容以及群友发它前后的聊天上下文，总结这张表情包的适用情绪标签(2-4个简短中文词)和你对它使用场景的理解(30字以内)。",
+                '仅输出 JSON：{"emotion_tags":["无语","吐槽"],"context_hint":"群友遇到离谱或踩坑时用来表达崩溃无语"}',
+            ]
+            if vis_desc:
+                prompt_parts.append(f"图片画面摘要：{vis_desc}")
+            if context_blob:
+                prompt_parts.append(f"群聊上下文：\n{context_blob}")
+            prompt = "\n\n".join(prompt_parts)
             try:
                 res = await model_hub.chat_complete(
                     session,
                     slot="reflection",
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3,
-                    max_tokens=160,
+                    max_tokens=240,
                     source="reflection",
+                    disable_thinking=True,
                 )
                 raw_out = (res.content or "").strip()
                 fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", raw_out, flags=re.DOTALL | re.IGNORECASE)
@@ -299,7 +351,8 @@ class StickerService:
                 tags = [str(t).strip() for t in (parsed.get("emotion_tags") or []) if str(t).strip()][:5]
                 hint = str(parsed.get("context_hint") or "").strip()[:160]
                 if tags:
-                    asset.emotion_tags = list(dict.fromkeys([*(asset.emotion_tags or []), *tags]))
+                    existing_clean = [t for t in (asset.emotion_tags or []) if t != "fun"]
+                    asset.emotion_tags = list(dict.fromkeys([*existing_clean, *tags]))
                 if hint:
                     asset.context_hint = hint
                 await session.flush()

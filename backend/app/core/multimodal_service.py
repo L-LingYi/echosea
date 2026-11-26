@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 MAX_VISION_IMAGE_BYTES = 5 * 1024 * 1024
 
 
+def _detect_image_mime(data: bytes) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 def deterministic_url_hash(url: str, prefix: str = "url") -> str:
     """Return a deterministic 16-hex SHA256 digest tag for URL fallback deduplication."""
     digest = hashlib.sha256((url or "").encode("utf-8")).hexdigest()[:16]
@@ -165,15 +177,19 @@ class MultimodalService:
 
         frames_sampled = 1
         payload_bytes = image_bytes
-        if is_gif:
+        effective_gif = bool(is_gif) or image_bytes.startswith((b"GIF87a", b"GIF89a"))
+        if effective_gif:
             payload_bytes, frames_sampled = stitch_gif_3x3_grid(image_bytes)
+            mime_type = "image/jpeg"
+        else:
+            mime_type = _detect_image_mime(payload_bytes)
 
         b64 = base64.b64encode(payload_bytes).decode("ascii")
         if cached is None:
             cached = ImageVisionCache(
                 phash=phash,
                 source_url=source_url,
-                is_gif_grid=is_gif and frames_sampled > 1,
+                is_gif_grid=effective_gif and frames_sampled > 1,
                 description="",
             )
             session.add(cached)
@@ -182,11 +198,11 @@ class MultimodalService:
         return {
             "cache_hit": False,
             "phash": phash,
-            "is_gif_grid": is_gif and frames_sampled > 1,
+            "is_gif_grid": effective_gif and frames_sampled > 1,
             "frames_sampled": frames_sampled,
             "content_block": {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             },
         }
 

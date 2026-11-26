@@ -869,8 +869,9 @@ class ReflectionService:
                 slot="reflection",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
-                max_tokens=1200,
+                max_tokens=1500,
                 source="reflection",
+                disable_thinking=True,
             )
             parsed = self._parse_llm_json(res.content)
         except Exception as exc:
@@ -923,17 +924,36 @@ class ReflectionService:
         if not pending:
             return {"approved": 0, "rejected": 0}
 
+        from app.core.multimodal_service import download_image_bytes
+
+        ephemeral_qq_hosts = ("multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn")
         approved = 0
         rejected = 0
         candidates: list[StickerAsset] = []
         for asset in pending:
             has_local = bool(asset.file_path and Path(asset.file_path).is_file())
-            has_url = bool((asset.source_url or "").strip().startswith(("http://", "https://")))
+            raw_url = (asset.source_url or "").strip()
+            has_url = bool(raw_url.startswith(("http://", "https://")))
             if not has_local and not has_url:
                 asset.status = "rejected"
                 rejected += 1
-            else:
-                candidates.append(asset)
+                continue
+            if not has_local and has_url and any(h in raw_url.lower() for h in ephemeral_qq_hosts):
+                img_bytes = await download_image_bytes(raw_url, timeout=3.0)
+                if not img_bytes:
+                    asset.status = "rejected"
+                    rejected += 1
+                    continue
+                try:
+                    storage_dir = Path("data/stickers")
+                    storage_dir.mkdir(parents=True, exist_ok=True)
+                    safe_name = "".join(ch for ch in (asset.phash or f"stk_{asset.id}") if ch.isalnum() or ch in ("_", "-"))[:64]
+                    dest = storage_dir / f"{safe_name}.bin"
+                    dest.write_bytes(img_bytes)
+                    asset.file_path = str(dest)
+                except OSError:
+                    pass
+            candidates.append(asset)
 
         if not candidates:
             await session.flush()
@@ -965,8 +985,9 @@ class ReflectionService:
                 slot="reflection",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
-                max_tokens=1000,
+                max_tokens=1200,
                 source="reflection",
+                disable_thinking=True,
             )
             parsed = self._parse_llm_json(res.content)
             for item in parsed.get("reviews") or []:

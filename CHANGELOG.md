@@ -1,5 +1,16 @@
 # 更新日志（Changelog）
 
+## v1.9.4 (2026-11-27)
+- **表情包发图频率节流、防重复与偷图自学习修复**：
+  - **发图冷却与轮次间隔**：新增 `STICKER_COOLDOWN_SECONDS=180` 与 `STICKER_MIN_REPLY_GAP=3`（经 `StateStore` 持久化记录每会话上次发图时间与无图回复计数），同时收敛 `prompt_builder.py` 斗图配图提示词为低频克制触发；`StickerService.pick_sticker_for_tag()` 规避最近已发的 12 张表情，并在审核/导入/删图后即时失效 `top_tags` 缓存。
+  - **自动偷图权限容错与照片过滤**：`Dockerfile` 预创建 `/app/data/stickers` 并移交 `companion` 用户权限；`StickerService` 本地缓存落盘增加 `OSError` 安全降级与再次出现时自动回填，避免权限或磁盘异常中断偷图入库；`AutoStickerReactionPlugin` 过滤显式普通照片/截图（`sub_type=0`），专注采集 `mface`、表情包（`sub_type=1` / 摘要含「表情」/ GIF）；OneBot v11 发送正式采用标准表情段（`sub_type=1`）并支持本地 `base64://` 回退。
+  - **视觉辅助增强打标与反思清理**：`auto_tag_with_context` 优先结合 `ImageVisionCache` 画面摘要与聊天上下文生成精准中文情绪标签；夜间反思 `_review_pending_stickers()` 在入审前尝试回填或淘汰已失效的 QQ 临时链接（`multimedia.nt.qq.com.cn` / `qpic.cn`）。
+- **思考模型辅助调用静默失效修复与多模态格式增强**：
+  - 修复 `deepseek` / `qwen` 等思考模型在 `vision_caption`（图片后台摘要）、`reflection`（夜间反思与表情自动打标）及节点探活中未关闭思考导致耗尽 `max_tokens`、正文返回为空的问题：`ModelHubService` 在 `disable_thinking=True` 时同步下发 `thinking={"type": "disabled"}` 与 `reasoning_effort="none"`，并在出现空正文配非空 `reasoning_content` 时记录告警；提高 `vision_caption`（120）、`auto_tag`（240）与反思提取（1500）输出上限。
+  - `MultimodalService.lookup_or_prepare()` 改为按文件头魔数自动识别 PNG / GIF / JPEG / WebP MIME 类型及动态 GIF（不再仅依赖 `.gif` URL 后缀）。
+- **人物归属认知与意识海体验优化**：
+  - 修复群聊/私聊中提及、引用或直呼别名（含群名片与 `preferred_address`）关联其他群友时注入其公开 4D 画像；隔离 3D 意识海层叠上下文，确保弹窗抽屉不被星图遮挡。
+
 ## v1.9.3 (2026-11-27)
 - **3D 记忆意识海重构与 WebUI 深海观测站视觉升级**：
   - **3D 发光星海与悬停名片/记忆摘要**：将 `frontend/js/sea.js` 升级为零依赖 3D 轨道相机星图，默认以发光顶点 + 精简名称呈现，中心始终锁定在 `EchoSea · 意识核心` 并自动避开右侧详情抽屉占位；鼠标悬浮光点即弹出对应人物名片卡或记忆摘要卡，支持「人物 · 记忆」精简视图与「全量五层」切换、关键词检索直达、按群域筛选与 `3D / 2D` 切换。

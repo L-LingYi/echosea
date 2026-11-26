@@ -223,6 +223,8 @@ def create_app(
             debounce_max_wait_seconds=settings.debounce_max_wait_seconds,
             bubble_delay_min_seconds=settings.bubble_delay_min_seconds,
             bubble_delay_max_seconds=settings.bubble_delay_max_seconds,
+            sticker_cooldown_seconds=settings.sticker_cooldown_seconds,
+            sticker_min_reply_gap=settings.sticker_min_reply_gap,
             enable_background_image_caption=settings.enable_background_image_caption,
             session_factory=db_mgr.session_factory,
         )

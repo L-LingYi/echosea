@@ -13,7 +13,7 @@ COPY backend /app/backend
 COPY frontend /app/frontend
 COPY db /app/db
 
-RUN useradd -m -u 10001 companion && chown -R companion:companion /app
+RUN mkdir -p /app/data/stickers && useradd -m -u 10001 companion && chown -R companion:companion /app
 USER companion
 
 EXPOSE 8000
