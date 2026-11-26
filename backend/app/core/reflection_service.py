@@ -411,8 +411,9 @@ class ReflectionService:
                 )
             return ident, profiles_by_track[key]
 
+        bot_qqs = {int(m.sender_qq) for m in msgs if m.gatekeeper_decision == "bot_reply" and m.sender_qq}
         for m in msgs:
-            if m.gatekeeper_decision == "bot_reply":
+            if m.gatekeeper_decision == "bot_reply" or m.sender_qq in bot_qqs:
                 continue
             track = "public" if m.scene == "group" else "private"
             strict_public = track == "public"
@@ -457,7 +458,7 @@ class ReflectionService:
             if not isinstance(item, dict):
                 continue
             qq = int(item.get("qq_id") or 0)
-            if not qq:
+            if not qq or qq in bot_qqs:
                 continue
             scene_val = str(item.get("scene") or "group")
             track = "private" if scene_val == "private" else "public"
@@ -560,8 +561,9 @@ class ReflectionService:
         today_local: Any,
     ) -> int:
         episodes_created = 0
+        bot_qqs = {int(m.sender_qq) for m in msgs if m.gatekeeper_decision == "bot_reply" and m.sender_qq}
         for m in msgs:
-            if m.gatekeeper_decision == "bot_reply":
+            if m.gatekeeper_decision == "bot_reply" or m.sender_qq in bot_qqs:
                 continue
             if any(cue in m.raw_text for cue in ANNIVERSARY_CUES):
                 scope = "public_group" if m.scene == "group" else "private_dm"

@@ -7,10 +7,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_admin, get_db, get_runtime
 from app.core.profile_schema import normalize_profile, relationship_tier
-from app.models.db import AmbientSummary, GroupExpression, MemoryEpisode, QQIdentity, SelfLifeState
+from app.models.db import AmbientSummary, ChatMessage, GroupExpression, MemoryEpisode, QQIdentity, SelfLifeState
 from app.models.schemas import ExpressionReviewRequest, ForgetRequest, IdentityUpdate
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
+
+
+async def _resolve_bot_qqs(session: AsyncSession, runtime: object | None = None) -> set[int]:
+    """Identify the bot's own QQ ID(s) from runtime config/adapter and recorded bot_reply messages."""
+    bot_qqs: set[int] = set()
+    if runtime is not None:
+        for val in (
+            getattr(getattr(runtime, "adapter", None), "bot_qq", 0),
+            getattr(getattr(runtime, "settings", None), "bot_qq", 0),
+        ):
+            if val:
+                bot_qqs.add(int(val))
+    rows = (
+        await session.execute(
+            select(ChatMessage.sender_qq).where(ChatMessage.gatekeeper_decision == "bot_reply").distinct()
+        )
+    ).scalars().all()
+    for qq in rows:
+        if qq:
+            bot_qqs.add(int(qq))
+    return bot_qqs
 
 
 @router.get("/identities")
@@ -20,9 +41,12 @@ async def list_identities(
     session: AsyncSession = Depends(get_db),
     runtime=Depends(get_runtime),
 ):
-    items = await runtime.identity_service.list_identities(session, limit=limit)
+    bot_qqs = await _resolve_bot_qqs(session, runtime)
+    items = await runtime.identity_service.list_identities(session, limit=limit + len(bot_qqs))
     result = []
     for i in items:
+        if i.qq_id in bot_qqs:
+            continue
         tier_key, tier_label = relationship_tier(i.relationship_level)
         result.append(
             {
@@ -38,6 +62,8 @@ async def list_identities(
                 "last_seen_at": i.last_seen_at.isoformat(),
             }
         )
+        if len(result) >= limit:
+            break
     return result
 
 
@@ -212,6 +238,7 @@ async def consciousness_sea_graph(
     limit_episodes: int = Query(default=40, ge=5, le=120),
     _admin=Depends(get_current_admin),
     session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
 ):
     """Consciousness Sea (意识海): Multi-layer Memory Knowledge Graph for interactive WebUI visualization.
 
@@ -252,14 +279,28 @@ async def consciousness_sea_graph(
         },
     )
 
-    # 2. L4 QQ Identities & Discovered Group Worlds
+    # 2. L4 QQ Identities & Discovered Group Worlds (exclude bot's own QQ — represented by self_core!)
+    bot_qqs = await _resolve_bot_qqs(session, runtime)
     identities = list(
-        (await session.execute(select(QQIdentity).order_by(QQIdentity.last_seen_at.desc()).limit(limit_identities)))
+        (await session.execute(select(QQIdentity).order_by(QQIdentity.last_seen_at.desc()).limit(limit_identities + len(bot_qqs))))
         .scalars()
         .all()
     )
     groups_seen: set[int] = set()
+    visible_identities = 0
     for ident in identities:
+        if ident.qq_id in bot_qqs:
+            for gid_str in (ident.group_cards or {}).keys():
+                if gid_str.isdigit():
+                    gid = int(gid_str)
+                    groups_seen.add(gid)
+                    gnid = f"group_{gid}"
+                    _add_node(gnid, f"群 {gid}", "group", size=20, summary=f"群聊记忆域 {gid}", detail={"group_id": gid})
+                    _add_edge("self_core", gnid, "常驻群域", strength=0.85)
+            continue
+        if visible_identities >= limit_identities:
+            continue
+        visible_identities += 1
         uid = f"qq_{ident.qq_id}"
         display = ident.nickname or str(ident.qq_id)
         has_private = bool(ident.private_profile)
@@ -319,7 +360,8 @@ async def consciousness_sea_graph(
         )
         _add_edge(gnid, aid, "旁听沉淀", strength=0.55)
         for pqq in (amb.active_participants or [])[:6]:
-            _add_edge(f"qq_{pqq}", aid, "参与讨论", strength=0.45)
+            if int(pqq) not in bot_qqs:
+                _add_edge(f"qq_{pqq}", aid, "参与讨论", strength=0.45)
 
     # 4. L3 Episodic Memories & Anniversaries (shows public_group vs private_dm semi-isolation!)
     episodes = list(
@@ -345,13 +387,13 @@ async def consciousness_sea_graph(
                 "created_at": ep.created_at.isoformat(),
             },
         )
-        if ep.qq_id:
+        if ep.qq_id and int(ep.qq_id) not in bot_qqs:
             _add_edge(f"qq_{ep.qq_id}", eid, "私密记忆(半隔离)" if ep.scope == "private_dm" else "共同经历", strength=0.8)
         if ep.group_id:
             gnid = f"group_{ep.group_id}"
             _add_node(gnid, f"群 {ep.group_id}", "group", size=20, summary=f"群聊记忆域 {ep.group_id}", detail={"group_id": ep.group_id})
             _add_edge(gnid, eid, "群内情景", strength=0.65)
-        if not ep.qq_id and not ep.group_id:
+        if (not ep.qq_id or int(ep.qq_id) in bot_qqs) and not ep.group_id:
             _add_edge("self_core", eid, "自我回忆", strength=0.6)
 
     # 5. L4 Approved & Pending Group Slang

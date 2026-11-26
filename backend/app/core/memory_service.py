@@ -95,7 +95,7 @@ class MemoryService:
         if not msgs:
             return None
 
-        participants = sorted({m.sender_qq for m in msgs})
+        participants = sorted({m.sender_qq for m in msgs if m.gatekeeper_decision != "bot_reply"})
         lines = [f"{m.sender_display_name}: {m.raw_text}" for m in msgs if m.raw_text.strip()]
         if not lines:
             return None

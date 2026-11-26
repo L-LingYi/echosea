@@ -515,3 +515,27 @@ def test_v190_webui_apis_4d_identity_edit_and_suggestion_review():
         active_v = next(v for v in versions if v["is_active"])
         assert any(ex["assistant"] == "摸，必须摸到下班" for ex in active_v["few_shot_examples"])
         assert "哟呵" in active_v["banned_phrases"]
+
+        # 3. Bot's own QQ (recorded via bot_reply even when settings.bot_qq=0) MUST NOT appear in /api/memory/graph or /api/memory/identities
+        async def _seed_bot():
+            async with app.state.db_manager.session_factory() as s:
+                s.add(QQIdentity(qq_id=2164459727, nickname="小呆呆", group_cards={"486135657": "小呆呆"}))
+                s.add(
+                    ChatMessage(
+                        message_id="bot_self_1",
+                        scene="group",
+                        group_id=486135657,
+                        sender_qq=2164459727,
+                        sender_display_name="小呆呆",
+                        raw_text="哈哈确实",
+                        gatekeeper_decision="bot_reply",
+                    )
+                )
+                await s.commit()
+
+        _aio.run(_seed_bot())
+        ids_after = client.get("/api/memory/identities", headers=headers).json()
+        assert all(i["qq_id"] != 2164459727 for i in ids_after)
+        graph = client.get("/api/memory/graph", headers=headers).json()
+        assert all(n["id"] != "qq_2164459727" for n in graph["nodes"])
+        assert any(n["id"] == "group_486135657" for n in graph["nodes"])
