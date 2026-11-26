@@ -28,6 +28,7 @@ from app.core.model_hub import ModelHubService
 from app.core.multimodal_service import MultimodalService
 from app.core.redis_store import StateStore
 from app.core.reflection_service import ReflectionService
+from app.core.scheduler import CoreScheduler
 from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService
 from app.core.tts_service import DoubaoTTSService
@@ -73,6 +74,8 @@ def create_app(
     update_http_post=None,
     backup_http_client_factory=None,
     preset_fetcher=None,
+    image_fetcher=None,
+    enable_background_scheduler: bool = True,
 ) -> FastAPI:
     settings = settings_override or get_settings()
     _configure_runtime_time_and_logging(settings, apply_process_tz=(settings_override is None))
@@ -81,6 +84,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.settings = settings
         app.state.shutting_down = False
+        app.state.in_flight_tasks = set()
         app.state.login_rate_limiter = LoginRateLimiter()
 
         # 1. Database initialization
@@ -88,9 +92,10 @@ def create_app(
         db_mgr.init(settings.database_url)
         await db_mgr.create_all()
         if db_mgr.engine.dialect.name == "postgresql":
-            for mig_name in ("migrations_v1_1.sql", "migrations_v1_2.sql"):
-                mig_path = Path(__file__).resolve().parents[2] / "db" / mig_name
-                await db_mgr.run_migration_script(mig_path.read_text(encoding="utf-8"))
+            await db_mgr.apply_migration_files(
+                Path(__file__).resolve().parents[2] / "db",
+                ("migrations_v1_1.sql", "migrations_v1_2.sql", "migrations_v1_3.sql"),
+            )
         app.state.db_manager = db_mgr
 
         # Seed default admin user if table is empty
@@ -109,6 +114,7 @@ def create_app(
         store = StateStore(redis_url=settings.redis_url, force_memory=force_memory_store)
         await store.connect()
         app.state.store = store
+        app.state.state_store = store
 
         # 3. Core Services (Phases 1 + 2 + 3)
         event_bus = PluginEventBus(default_timeout=settings.plugin_timeout_seconds)
@@ -140,7 +146,7 @@ def create_app(
             http_access_token=settings.snowluma_http_access_token,
             bot_qq=settings.bot_qq,
         )
-        multimodal_service = MultimodalService()
+        multimodal_service = MultimodalService(image_fetcher=image_fetcher)
         sticker_service = StickerService()
         tts_service = DoubaoTTSService(master_key=settings.master_encryption_key, synthesizer=tts_synthesizer)
         reflection_service = ReflectionService(model_hub=model_hub, timezone_name=settings.app_timezone)
@@ -183,6 +189,7 @@ def create_app(
             sticker_service=sticker_service,
             tts_service=tts_service,
             web_perception=web_perception,
+            multimodal_service=multimodal_service,
             admin_qq=settings.admin_qq,
             group_rate_limit_per_min=settings.group_rate_limit_per_minute,
             global_rate_limit_per_min=settings.global_rate_limit_per_minute,
@@ -194,6 +201,7 @@ def create_app(
             stale_soft_entry_min_msgs=settings.stale_soft_entry_min_msgs,
             smart_quote_min_intervening=settings.smart_quote_min_intervening,
             smart_quote_min_delay_seconds=settings.smart_quote_min_delay_seconds,
+            debounce_window_seconds=settings.debounce_window_seconds,
         )
 
         async def _send_admin_qq(admin_qq: int, text: str) -> bool:
@@ -228,46 +236,62 @@ def create_app(
         plugin_manager.load(RemoteBackupSyncPlugin(), app.state)
         app.state.plugin_manager = plugin_manager
 
-        # 5. Optional Forward WS client loop to SnowLuma
+        # 5. Optional Forward WS client loop to SnowLuma & Unified CoreScheduler
         stop_event = asyncio.Event()
         forward_task: asyncio.Task | None = None
         if settings.snowluma_mode in ("forward_ws", "dual") and not force_memory_store:
             async def _on_forward_event(data: dict):
                 if app.state.shutting_down:
                     return
-                async with db_mgr.session_factory() as s:
-                    await pipeline.handle_raw_onebot_event(s, data)
-                    await s.commit()
+                await pipeline.enqueue_or_handle_raw_event(db_mgr.session_factory, data)
 
             forward_task = asyncio.create_task(adapter.run_forward_ws_loop(_on_forward_event, stop_event))
 
-        async def _backup_scheduler_loop() -> None:
-            while not app.state.shutting_down:
-                try:
-                    await asyncio.sleep(600)
-                    if app.state.shutting_down:
-                        break
-                    async with db_mgr.session_factory() as s:
-                        await backup_service.run_scheduled_if_due(s, alert_service=alert_service)
-                        await s.commit()
-                except asyncio.CancelledError:
-                    break
-                except Exception as exc:
-                    logger.warning("Automated backup scheduler tick failed: %s", exc)
-
-        backup_task = asyncio.create_task(_backup_scheduler_loop())
+        core_scheduler = CoreScheduler(
+            life_schedule=life_schedule,
+            web_perception=web_perception,
+            reflection_service=reflection_service,
+            backup_service=backup_service,
+            alert_service=alert_service,
+            timezone_name=settings.app_timezone,
+        )
+        app.state.core_scheduler = core_scheduler
+        scheduler_task: asyncio.Task | None = None
+        if enable_background_scheduler and not force_memory_store:
+            scheduler_task = asyncio.create_task(
+                core_scheduler.run_loop(db_mgr.session_factory, stop_event, tick_seconds=60.0),
+                name="core_scheduler",
+            )
 
         yield
 
         app.state.shutting_down = True
-        backup_task.cancel()
         stop_event.set()
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            try:
+                await asyncio.wait_for(scheduler_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
         if forward_task is not None:
             forward_task.cancel()
             try:
                 await asyncio.wait_for(forward_task, timeout=3.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
+
+        drain_timeout = float(getattr(settings, "shutdown_drain_timeout_seconds", 12.0))
+        pending_ws = [t for t in app.state.in_flight_tasks if not t.done()]
+        if pending_ws:
+            _, still_ws = await asyncio.wait(pending_ws, timeout=drain_timeout)
+            for t in still_ws:
+                t.cancel()
+            if still_ws:
+                await asyncio.gather(*still_ws, return_exceptions=True)
+
+        await adapter.drain_tasks(timeout=min(5.0, drain_timeout))
+        await pipeline.debouncer.drain(timeout=3.0)
+        await event_bus.drain_background(timeout=min(5.0, drain_timeout))
         await store.close()
         await db_mgr.dispose()
 

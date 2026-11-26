@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS admin_users (
     totp_secret_enc TEXT,
     totp_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    token_version   INTEGER NOT NULL DEFAULT 1,
     last_login_at   TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

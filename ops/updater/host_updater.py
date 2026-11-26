@@ -33,6 +33,13 @@ PROTECTED_FILES = (
     "Dockerfile", "docker-compose.yml", "docker-compose.override.yml", ".dockerignore", ".env", ".gitattributes",
 )
 LOCK = threading.Lock()
+CHECK_CACHE_TTL_SECONDS = 30.0
+_CHECK_CACHE: dict[str, Any] = {"ts": 0.0, "data": None}
+
+
+def invalidate_check_cache() -> None:
+    _CHECK_CACHE["ts"] = 0.0
+    _CHECK_CACHE["data"] = None
 
 
 def sign(timestamp: str, body: bytes) -> str:
@@ -211,13 +218,16 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, code: int, payload: dict) -> None:
         wire = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         stamp = str(int(time.time()))
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(wire)))
-        self.send_header("X-Updater-Timestamp", stamp)
-        self.send_header("X-Updater-Signature", sign(stamp, wire))
-        self.end_headers()
-        self.wfile.write(wire)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(wire)))
+            self.send_header("X-Updater-Timestamp", stamp)
+            self.send_header("X-Updater-Signature", sign(stamp, wire))
+            self.end_headers()
+            self.wfile.write(wire)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError) as exc:
+            logger.debug("Updater HTTP reply dropped by client: %s", exc)
 
     def authenticated(self, body: bytes) -> bool:
         stamp = self.headers.get("X-Updater-Timestamp", "")
@@ -245,12 +255,20 @@ class Handler(BaseHTTPRequestHandler):
                     return
             self.reply(404, {"error": "unknown_job"})
         elif self.path == "/check":
+            now_mono = time.monotonic()
+            cached = _CHECK_CACHE.get("data")
+            if cached is not None and (now_mono - float(_CHECK_CACHE.get("ts", 0.0))) < CHECK_CACHE_TTL_SECONDS:
+                self.reply(200, cached)
+                return
             if not LOCK.acquire(blocking=False):
                 self.reply(409, {"error": "update_in_progress"})
                 return
             try:
                 previous, commit = candidate()
-                self.reply(200, {"current_commit": previous, "target_ref": commit, "update_available": previous != commit})
+                payload = {"current_commit": previous, "target_ref": commit, "update_available": previous != commit}
+                _CHECK_CACHE["data"] = payload
+                _CHECK_CACHE["ts"] = time.monotonic()
+                self.reply(200, payload)
             except (ValueError, RuntimeError, subprocess.TimeoutExpired):
                 self.reply(503, {"error": "source_unavailable"})
             finally:
@@ -289,6 +307,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(409, {"error": "duplicate_job"})
             return
         job = {"job_uid": job_uid, "status": "running", "rolled_back": False}
+        invalidate_check_cache()
         try:
             save(job)
             threading.Thread(target=upgrade, args=(job, target), daemon=True).start()

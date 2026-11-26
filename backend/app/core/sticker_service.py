@@ -1,6 +1,7 @@
 """Sticker Auto-Learning, Perceptual Hash Dedup, Gallery Review, and Reply Tag Trigger."""
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -8,8 +9,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.multimodal_service import compute_dhash, hamming_distance
+from app.core.multimodal_service import compute_dhash, deterministic_url_hash, hamming_distance
 from app.models.db import StickerAsset
+
+logger = logging.getLogger(__name__)
 
 POSITIVE_REACTION_CUES = ("哈哈", "草", "笑死", "偷了", "好图", "乐", "典", "绷不住", "666", "收了")
 STICKER_TAG_RE = re.compile(r"\[(?:sticker|表情)[:：]([^\]\s]+)\]", re.IGNORECASE)
@@ -124,7 +127,7 @@ class StickerService:
             phash = str(item.get("phash") or "").strip()
             source_url = str(item.get("source_url") or "").strip()
             if not phash:
-                phash = f"manual_{abs(hash(source_url)) % (10**16):016x}"
+                phash = deterministic_url_hash(source_url, prefix="manual")
             existing = (await session.execute(select(StickerAsset).where(StickerAsset.phash == phash))).scalar_one_or_none()
             if existing is not None:
                 existing.emotion_tags = list(dict.fromkeys([*(existing.emotion_tags or []), *(item.get("emotion_tags") or [])]))
@@ -196,8 +199,8 @@ class StickerService:
                     asset.context_hint = hint
                 await session.flush()
                 return asset
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("LLM sticker auto-tagging skipped/failed [%s]: %s", type(exc).__name__, exc)
 
         # 2. Deterministic context-aware heuristic tagger fallback
         cue_map = [
@@ -317,7 +320,8 @@ class StickerService:
                         obj = _json.loads(line)
                         if isinstance(obj, dict):
                             records.append(obj)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("Skipping malformed JSONL sticker line: %s", exc)
                         continue
 
         # Normalize diverse dataset schemas -> import_manual items

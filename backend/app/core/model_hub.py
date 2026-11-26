@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.alert_service import AlertService
+from app.core.circuit_breaker import ProviderCircuitBreaker
 from app.models.db import ModelProvider, UsageMetric
 from app.security import decrypt_secret, encrypt_secret, mask_secret
 
@@ -71,70 +72,25 @@ class ModelHubService:
         self._systemone_caller = systemone_caller
         self._clock = clock or time.time
         self._consecutive_failures: dict[str, int] = {}
-        self._provider_failures: dict[int, int] = {}
-        self._cooldowns: dict[int, dict[str, Any]] = {}
+        self._cb = ProviderCircuitBreaker(alert_service=alert_service, clock=self._clock)
+        self._provider_failures = self._cb.provider_failures
+        self._cooldowns = self._cb.cooldowns
 
     # ------------------------------------------------------------------
-    # Smart Cooldown / Circuit-Breaker & Half-Open Auto-Recovery (v1.3.4)
+    # Smart Cooldown / Circuit-Breaker & Half-Open Auto-Recovery (delegated)
     # ------------------------------------------------------------------
     def _now(self) -> float:
-        return float(self._clock())
+        return self._cb.now()
 
     def get_cooldown_state(self, provider_id: int) -> dict[str, Any]:
-        info = self._cooldowns.get(provider_id)
-        if not info:
-            return {
-                "cooldown_active": False,
-                "cooldown_remaining_seconds": 0,
-                "cooldown_until": None,
-                "cooldown_reason": None,
-                "cooldown_kind": None,
-            }
-        remaining = int(max(0.0, info["cooldown_until"] - self._now()))
-        active = remaining > 0
-        return {
-            "cooldown_active": active,
-            "cooldown_remaining_seconds": remaining,
-            "cooldown_until": datetime.fromtimestamp(info["cooldown_until"], tz=timezone.utc).isoformat() if active else None,
-            "cooldown_reason": info.get("reason") if active else None,
-            "cooldown_kind": info.get("kind") if active else None,
-        }
+        return self._cb.get_cooldown_state(provider_id)
 
     def clear_cooldown(self, provider_id: int) -> bool:
-        existed = provider_id in self._cooldowns
-        self._cooldowns.pop(provider_id, None)
-        self._provider_failures.pop(provider_id, None)
-        return existed
+        return self._cb.clear_cooldown(provider_id)
 
     @staticmethod
     def _classify_provider_error(exc: Exception) -> tuple[str, int | None, str]:
-        """Classify failure into ('quota_exhausted' | 'auth_or_config' | 'transient', retry_after_sec, detail)."""
-        status_code: int | None = None
-        retry_after: int | None = None
-        body_text = ""
-
-        if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
-            status_code = exc.response.status_code
-            ra = exc.response.headers.get("Retry-After") or exc.response.headers.get("retry-after")
-            if ra:
-                try:
-                    retry_after = max(30, min(86400, int(float(ra.strip()))))
-                except Exception:
-                    retry_after = None
-            try:
-                body_text = (exc.response.text or "")[:300]
-            except Exception:
-                body_text = ""
-
-        msg = f"{type(exc).__name__}: {exc} {body_text}".lower()
-        quota_keywords = ("quota", "rate limit", "rate_limit", "too many requests", "insufficient", "balance", "credit", "limit exceeded", "exhausted", "free tier")
-
-        if status_code in (429, 402) or any(k in msg for k in quota_keywords):
-            detail = f"HTTP {status_code} 额度/限流触发冷却" if status_code else f"额度/限流触发冷却 ({type(exc).__name__})"
-            return "quota_exhausted", retry_after, detail
-        if status_code in (400, 401, 403, 404):
-            return "auth_or_config", None, f"HTTP {status_code} 配置/鉴权异常"
-        return "transient", retry_after, f"上游暂不可用 ({type(exc).__name__})"
+        return ProviderCircuitBreaker.classify_provider_error(exc)
 
     def _compute_cooldown_seconds(
         self,
@@ -143,29 +99,7 @@ class ModelHubService:
         strike_count: int,
         retry_after: int | None,
     ) -> int:
-        extra = provider.extra_config or {}
-        if kind == "quota_exhausted":
-            if retry_after is not None:
-                return retry_after
-            # Optional periodic UTC reset hour (e.g. {"quota_reset_utc_hour": 0} for daily midnight UTC reset)
-            if "quota_reset_utc_hour" in extra and extra["quota_reset_utc_hour"] is not None:
-                try:
-                    target_hour = int(extra["quota_reset_utc_hour"]) % 24
-                    now_dt = datetime.fromtimestamp(self._now(), tz=timezone.utc)
-                    next_reset = now_dt.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-                    if next_reset <= now_dt:
-                        next_reset += timedelta(days=1)
-                    return max(60, int((next_reset - now_dt).total_seconds()))
-                except Exception:
-                    pass
-            base_sec = int(extra.get("quota_cooldown_seconds", 3600))
-            return min(21600, max(60, base_sec * (2 ** min(strike_count - 1, 3))))
-        if kind == "auth_or_config":
-            base_sec = int(extra.get("error_cooldown_seconds", 1800))
-            return min(14400, max(60, base_sec * (2 ** min(strike_count - 1, 2))))
-        # transient: short exponential backoff (5m -> 10m -> 20m -> 30m)
-        base_sec = int(extra.get("transient_cooldown_seconds", 300))
-        return min(1800, max(30, base_sec * (2 ** min(strike_count - 1, 3))))
+        return self._cb.compute_cooldown_seconds(provider, kind, strike_count, retry_after)
 
     async def _record_provider_failure(
         self,
@@ -174,69 +108,10 @@ class ModelHubService:
         exc: Exception,
         has_alternative: bool,
     ) -> None:
-        kind, retry_after, detail = self._classify_provider_error(exc)
-        pid = provider.id
-        self._provider_failures[pid] = self._provider_failures.get(pid, 0) + 1
-        fail_count = self._provider_failures[pid]
-
-        # Quota or auth/config errors trip immediately; transient errors trip after 3 consecutive failures
-        should_trip = (kind in ("quota_exhausted", "auth_or_config")) or (fail_count >= 3)
-        if not should_trip:
-            return
-
-        prev = self._cooldowns.get(pid) or {}
-        strikes = int(prev.get("strike_count", 0)) + 1
-        cooldown_sec = self._compute_cooldown_seconds(provider, kind, strikes, retry_after)
-        until_ts = self._now() + cooldown_sec
-        self._cooldowns[pid] = {
-            "cooldown_until": until_ts,
-            "reason": detail,
-            "kind": kind,
-            "strike_count": strikes,
-            "tripped_at": datetime.fromtimestamp(self._now(), tz=timezone.utc).isoformat(),
-        }
-        provider.last_health_status = "cooldown"
-        provider.last_checked_at = datetime.now(timezone.utc)
-        logger.warning(
-            "Provider '%s' (%s/%s) entered %ds cooldown [%s, strike=%d]: %s",
-            provider.name,
-            provider.slot,
-            provider.role,
-            cooldown_sec,
-            kind,
-            strikes,
-            detail,
-        )
-        # Emit dashboard alert on first trip so Ops knows failover occurred
-        if strikes == 1 and has_alternative:
-            mins = max(1, cooldown_sec // 60)
-            await self.alert_service.notify(
-                session,
-                severity="warning" if kind != "auth_or_config" else "critical",
-                category="provider_failover",
-                title=f"槽位 {provider.slot} 主路冷却，已自动切至备路",
-                detail=f"{provider.name} ({provider.model_name}) 触发 {detail}，进入 {mins} 分钟冷却期；到期后将自动试探恢复主路。",
-            )
+        await self._cb.record_failure(session, provider, exc, has_alternative)
 
     def _order_providers_with_cooldown(self, providers: list[ModelProvider]) -> list[ModelProvider]:
-        """Skip providers currently in active cooldown when a healthy alternative exists.
-        Once cooldown expires, the primary naturally returns to index 0 (half-open auto-recovery).
-        """
-        if len(providers) <= 1:
-            return providers
-        now = self._now()
-        ready: list[ModelProvider] = []
-        cooling: list[tuple[float, ModelProvider]] = []
-        for p in providers:
-            info = self._cooldowns.get(p.id)
-            if info and now < float(info["cooldown_until"]):
-                cooling.append((float(info["cooldown_until"]), p))
-            else:
-                ready.append(p)
-        if ready:
-            return ready + [p for _, p in sorted(cooling, key=lambda x: x[0])]
-        # All cooling: try the one closest to expiry first
-        return [p for _, p in sorted(cooling, key=lambda x: x[0])]
+        return self._cb.order_providers(providers)
 
     async def upsert_provider(self, session: AsyncSession, data: dict[str, Any]) -> ModelProvider:
         stmt = select(ModelProvider).where(
@@ -584,6 +459,7 @@ class ModelHubService:
                     parsed = self._parse_jev_response(raw, default_target)
                     usage = raw.get("usage") or {}
                     p_tok = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+                    c_tok = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
                 else:
                     import json as _json
                     messages = [
@@ -603,7 +479,9 @@ class ModelHubService:
                         )
                     txt = raw.get("choices", [{}])[0].get("message", {}).get("content", "{}")
                     parsed = _json.loads(txt)
-                    p_tok = int((raw.get("usage") or {}).get("prompt_tokens", 0))
+                    usage = raw.get("usage") or {}
+                    p_tok = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+                    c_tok = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
 
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 was_cooling = self.clear_cooldown(provider.id)
@@ -612,13 +490,14 @@ class ModelHubService:
                 provider.last_health_status = "healthy"
                 provider.last_health_ms = elapsed_ms
                 provider.last_checked_at = datetime.now(timezone.utc)
-                cost = (p_tok / 1_000_000.0) * provider.price_input_per_1m
+                cost = (p_tok / 1_000_000.0) * provider.price_input_per_1m + (c_tok / 1_000_000.0) * provider.price_output_per_1m
                 session.add(
                     UsageMetric(
                         slot="gatekeeper",
                         provider_name=provider.name,
                         model_name=provider.model_name,
                         prompt_tokens=p_tok,
+                        completion_tokens=c_tok,
                         estimated_cost_usd=cost,
                         ttft_ms=elapsed_ms,
                         total_ms=elapsed_ms,

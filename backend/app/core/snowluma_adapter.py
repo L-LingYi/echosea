@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
@@ -55,7 +56,8 @@ class SnowLumaAdapter:
         self._connected_since: datetime | None = None
         self._last_heartbeat: datetime | None = None
         self._pending_echoes: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self.sent_log: list[dict[str, Any]] = []  # Useful for tests & local diagnostics
+        self.sent_log: deque[dict[str, Any]] = deque(maxlen=200)
+        self._dispatch_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def is_connected(self) -> bool:
@@ -303,7 +305,9 @@ class SnowLumaAdapter:
                             self.record_heartbeat()
                             continue
                         # Non-blocking dispatch so slow LLM/gatekeeper calls never stall WS keepalive or subsequent messages
-                        asyncio.create_task(self._safe_dispatch(on_event, data))
+                        task = asyncio.create_task(self._safe_dispatch(on_event, data), name="snowluma_forward_event")
+                        self._dispatch_tasks.add(task)
+                        task.add_done_callback(self._dispatch_tasks.discard)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -400,3 +404,15 @@ class SnowLumaAdapter:
             await on_event(data)
         except Exception as exc:
             logger.exception("Async SnowLuma event handler failed: %s", exc)
+
+
+    async def drain_tasks(self, timeout: float = 5.0) -> None:
+        """Await any active Forward WS event tasks during graceful shutdown."""
+        pending = [t for t in self._dispatch_tasks if not t.done()]
+        if not pending:
+            return
+        _, still_pending = await asyncio.wait(pending, timeout=max(0.1, timeout))
+        for task in still_pending:
+            task.cancel()
+        if still_pending:
+            await asyncio.gather(*still_pending, return_exceptions=True)

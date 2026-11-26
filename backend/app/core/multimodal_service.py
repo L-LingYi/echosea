@@ -2,15 +2,86 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
+import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
+import httpx
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.web_perception_service import _is_public_http_url
 from app.models.db import ImageVisionCache
+
+logger = logging.getLogger(__name__)
+MAX_VISION_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+def deterministic_url_hash(url: str, prefix: str = "url") -> str:
+    """Return a deterministic 16-hex SHA256 digest tag for URL fallback deduplication."""
+    digest = hashlib.sha256((url or "").encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}_{digest}"
+
+
+async def download_image_bytes(
+    url: str,
+    timeout: float = 3.0,
+    max_bytes: int = MAX_VISION_IMAGE_BYTES,
+    fetcher: Callable[[str], Awaitable[bytes | None]] | None = None,
+) -> bytes | None:
+    """Fetch image bytes safely with SSRF validation, strict timeout, and size cap."""
+    clean_url = (url or "").strip()
+    if not clean_url:
+        return None
+    if fetcher is not None:
+        try:
+            data = await fetcher(clean_url)
+            if data and len(data) <= max_bytes:
+                return data
+        except Exception as exc:
+            logger.debug("Custom image fetcher failed for %s: %s", clean_url, exc)
+        return None
+    if not _is_public_http_url(clean_url):
+        logger.debug("Blocked non-public image URL: %s", clean_url)
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            async with client.stream("GET", clean_url, headers={"User-Agent": "EchoSea-Vision/1.6"}) as resp:
+                if resp.status_code >= 400:
+                    return None
+                cl = resp.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > max_bytes:
+                    return None
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.aiter_bytes(65536):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        return None
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                return data or None
+    except Exception as exc:
+        logger.debug("Image download failed for %s [%s]: %s", clean_url, type(exc).__name__, exc)
+        return None
+
+
+async def resolve_image_phash(
+    url: str,
+    timeout: float = 3.0,
+    fetcher: Callable[[str], Awaitable[bytes | None]] | None = None,
+) -> tuple[str, bytes | None]:
+    """Download image bytes safely and compute real dHash; fallback to deterministic SHA256 on failure."""
+    data = await download_image_bytes(url, timeout=timeout, fetcher=fetcher)
+    if data:
+        try:
+            return compute_dhash(data), data
+        except Exception as exc:
+            logger.debug("compute_dhash failed for %s: %s", url, exc)
+    return deterministic_url_hash(url, prefix="url"), None
 
 
 def compute_dhash(image_bytes: bytes, hash_size: int = 8) -> str:
@@ -67,6 +138,9 @@ def stitch_gif_3x3_grid(gif_bytes: bytes, tile_size: int = 160) -> tuple[bytes, 
 
 class MultimodalService:
     """Prepares images & 3x3 GIF collages for native multimodal LLMs with dHash vision caching."""
+
+    def __init__(self, image_fetcher: Callable[[str], Awaitable[bytes | None]] | None = None) -> None:
+        self.image_fetcher = image_fetcher
 
     async def lookup_or_prepare(
         self,

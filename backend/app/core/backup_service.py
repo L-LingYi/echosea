@@ -515,8 +515,8 @@ class BackupService:
             try:
                 stale.unlink()
                 removed += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed removing stale backup %s: %s", stale, exc)
         return removed
 
     async def run_scheduled_if_due(self, session: AsyncSession, alert_service=None) -> BackupRecord | None:
@@ -534,8 +534,8 @@ class BackupService:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
                 if (now - last_dt).total_seconds() < interval_hours * 3600:
                     return None
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Invalid last_auto_backup_at '%s': %s", last_str, exc)
 
         rec = await self.run_backup(session)
         self.cleanup_old_local_backups(int(raw.get("retention_count", 14)))
@@ -549,3 +549,189 @@ class BackupService:
                 detail=f"目标：{rec.remote_target}，原因：{rec.error_message or '未知错误'}",
             )
         return rec
+
+    @staticmethod
+    def _parse_snapshot_bytes(raw_bytes: bytes) -> dict[str, Any]:
+        """Decompress (if gzipped) and validate an EchoSea backup snapshot payload."""
+        if not raw_bytes:
+            raise ValueError("备份文件为空")
+        payload_bytes = raw_bytes
+        if raw_bytes[:2] == b"\x1f\x8b":
+            try:
+                payload_bytes = gzip.decompress(raw_bytes)
+            except Exception as exc:
+                raise ValueError(f"Gzip 解压失败：{exc}") from exc
+        try:
+            data = json.loads(payload_bytes.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError(f"快照 JSON 解析失败：{exc}") from exc
+        if not isinstance(data, dict) or data.get("project") != "EchoSea":
+            raise ValueError("无效的 EchoSea 快照格式（缺少 project=EchoSea 标识）")
+        for key in ("identities", "episodes", "expressions", "stickers", "personas", "hot_sources"):
+            if key in data and not isinstance(data[key], list):
+                raise ValueError(f"快照字段 {key} 格式错误")
+        return data
+
+    async def verify_and_restore(
+        self,
+        session: AsyncSession,
+        raw_bytes: bytes,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Validate a gzipped/plain EchoSea JSON snapshot and atomically restore it when dry_run=False."""
+        data = self._parse_snapshot_bytes(raw_bytes)
+        identities = data.get("identities") or []
+        episodes = data.get("episodes") or []
+        expressions = data.get("expressions") or []
+        stickers = data.get("stickers") or []
+        personas = data.get("personas") or []
+        hot_sources = data.get("hot_sources") or []
+        summary = {
+            "identities": len(identities),
+            "episodes": len(episodes),
+            "expressions": len(expressions),
+            "stickers": len(stickers),
+            "personas": len(personas),
+            "hot_sources": len(hot_sources),
+        }
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "exported_at": data.get("exported_at"),
+                "counts": summary,
+            }
+
+        restored = {k: 0 for k in summary}
+        # Upsert identities first so episode FKs stay valid
+        for item in identities:
+            qq_id = int(item["qq_id"])
+            row = await session.get(QQIdentity, qq_id)
+            if row is None:
+                row = QQIdentity(qq_id=qq_id)
+                session.add(row)
+            row.nickname = str(item.get("nickname") or row.nickname or "")
+            row.group_cards = dict(item.get("group_cards") or {})
+            row.known_names = list(item.get("known_names") or [])
+            row.relationship_level = int(item.get("relationship_level") or 0)
+            row.public_profile = dict(item.get("public_profile") or {})
+            row.private_profile = dict(item.get("private_profile") or {})
+            restored["identities"] += 1
+
+        await session.flush()
+
+        for item in personas:
+            vtag = str(item.get("version_tag") or "").strip()
+            if not vtag:
+                continue
+            existing = (await session.execute(select(PersonaVersion).where(PersonaVersion.version_tag == vtag))).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    PersonaVersion(
+                        version_tag=vtag,
+                        bot_name=str(item.get("bot_name") or "小呆呆"),
+                        aliases=list(item.get("aliases") or []),
+                        system_prompt=str(item.get("system_prompt") or ""),
+                        banned_phrases=list(item.get("banned_phrases") or []),
+                        is_active=bool(item.get("is_active", False)),
+                    )
+                )
+            else:
+                existing.bot_name = str(item.get("bot_name") or existing.bot_name)
+                existing.aliases = list(item.get("aliases") or [])
+                existing.system_prompt = str(item.get("system_prompt") or existing.system_prompt)
+                existing.banned_phrases = list(item.get("banned_phrases") or [])
+                existing.is_active = bool(item.get("is_active", existing.is_active))
+            restored["personas"] += 1
+
+        for item in expressions:
+            gid = int(item["group_id"])
+            phrase = str(item.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            existing = (
+                await session.execute(
+                    select(GroupExpression).where(GroupExpression.group_id == gid, GroupExpression.phrase == phrase)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    GroupExpression(
+                        group_id=gid,
+                        phrase=phrase,
+                        meaning=str(item.get("meaning") or ""),
+                        status=str(item.get("status") or "pending"),
+                    )
+                )
+            else:
+                existing.meaning = str(item.get("meaning") or existing.meaning)
+                existing.status = str(item.get("status") or existing.status)
+            restored["expressions"] += 1
+
+        for item in stickers:
+            phash = str(item.get("phash") or "").strip()
+            if not phash:
+                continue
+            existing = (await session.execute(select(StickerAsset).where(StickerAsset.phash == phash))).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    StickerAsset(
+                        phash=phash,
+                        source_url=str(item.get("source_url") or ""),
+                        emotion_tags=list(item.get("emotion_tags") or []),
+                        context_hint=str(item.get("context_hint") or ""),
+                        status=str(item.get("status") or "pending"),
+                    )
+                )
+            else:
+                existing.source_url = str(item.get("source_url") or existing.source_url)
+                existing.emotion_tags = list(item.get("emotion_tags") or existing.emotion_tags or [])
+                existing.context_hint = str(item.get("context_hint") or existing.context_hint)
+                existing.status = str(item.get("status") or existing.status)
+            restored["stickers"] += 1
+
+        for item in hot_sources:
+            name = str(item.get("name") or "").strip()
+            feed_url = str(item.get("feed_url") or "").strip()
+            if not feed_url:
+                continue
+            existing = (await session.execute(select(HotTopicSource).where(HotTopicSource.feed_url == feed_url))).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    HotTopicSource(
+                        name=name or feed_url[:40],
+                        category=str(item.get("category") or "general"),
+                        feed_url=feed_url,
+                        is_enabled=bool(item.get("is_enabled", True)),
+                    )
+                )
+                restored["hot_sources"] += 1
+
+        existing_ep_keys = set(
+            (await session.execute(select(MemoryEpisode.scope, MemoryEpisode.group_id, MemoryEpisode.qq_id, MemoryEpisode.title))).all()
+        )
+        for item in episodes:
+            key = (str(item.get("scope") or "public_group"), item.get("group_id"), item.get("qq_id"), str(item.get("title") or ""))
+            if key in existing_ep_keys:
+                continue
+            session.add(
+                MemoryEpisode(
+                    scope=key[0],
+                    group_id=key[1],
+                    qq_id=key[2],
+                    title=key[3],
+                    content=str(item.get("content") or ""),
+                    importance=float(item.get("importance") or 0.5),
+                )
+            )
+            existing_ep_keys.add(key)
+            restored["episodes"] += 1
+
+        await session.flush()
+        return {
+            "ok": True,
+            "dry_run": False,
+            "exported_at": data.get("exported_at"),
+            "counts": summary,
+            "restored": restored,
+        }

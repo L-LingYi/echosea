@@ -44,6 +44,9 @@ async def get_current_admin(
     user = (await session.execute(stmt)).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    token_ver = payload.get("tv")
+    if token_ver is None or int(token_ver) != int(getattr(user, "token_version", 1)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked; please log in again")
     return user
 
 

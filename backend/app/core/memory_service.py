@@ -10,10 +10,12 @@ Plus: One-Click Forget (Blind Spot #4) cascading across messages, summaries, epi
 """
 from __future__ import annotations
 
+import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import (
@@ -117,6 +119,85 @@ class MemoryService:
         await session.flush()
         return summary
 
+    @staticmethod
+    def _tokenize_for_recall(text: str) -> set[str]:
+        """Extract word tokens and CJK 2-grams for lightweight language-agnostic lexical scoring."""
+        clean = (text or "").strip().lower()
+        if not clean:
+            return set()
+        tokens = set(re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]{2,}", clean))
+        cjk_runs = re.findall(r"[\u4e00-\u9fff]+", clean)
+        for run in cjk_runs:
+            if len(run) == 1:
+                tokens.add(run)
+            else:
+                for i in range(len(run) - 1):
+                    tokens.add(run[i : i + 2])
+        return tokens
+
+    @staticmethod
+    def _cosine_similarity(vec_a: list[float] | None, vec_b: list[float] | None) -> float:
+        if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+            return 0.0
+        dot = sum(float(a) * float(b) for a, b in zip(vec_a, vec_b))
+        na = math.sqrt(sum(float(a) * float(a) for a in vec_a))
+        nb = math.sqrt(sum(float(b) * float(b) for b in vec_b))
+        if na <= 1e-12 or nb <= 1e-12:
+            return 0.0
+        return dot / (na * nb)
+
+    def _hybrid_rank_episodes(
+        self,
+        candidates: list[MemoryEpisode],
+        query_text: str,
+        query_embedding: list[float] | None,
+        pg_fts_ranks: dict[int, float] | None,
+        limit: int,
+    ) -> list[MemoryEpisode]:
+        """Reciprocal Rank Fusion (RRF) across lexical match, vector similarity, importance, and recency."""
+        if not candidates:
+            return []
+        q_tokens = self._tokenize_for_recall(query_text)
+        now_utc = datetime.now(timezone.utc)
+
+        scored: list[tuple[int, float, float, float, float]] = []
+        for idx, ep in enumerate(candidates):
+            doc_tokens = self._tokenize_for_recall(f"{ep.title} {ep.content}")
+            overlap = (len(q_tokens & doc_tokens) / max(1, len(q_tokens))) if q_tokens else 0.0
+            pg_bonus = (pg_fts_ranks or {}).get(ep.id, 0.0)
+            lex = overlap + pg_bonus
+            vec = self._cosine_similarity(query_embedding, ep.embedding_json) if query_embedding else 0.0
+            imp = float(ep.importance or 0.5)
+            created = ep.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age_days = max(0.0, (now_utc - created).total_seconds() / 86400.0)
+            recency = math.exp(-age_days / 30.0)
+            scored.append((idx, lex, vec, imp, recency))
+
+        rrf: dict[int, float] = {i: 0.0 for i in range(len(candidates))}
+        k = 60.0
+
+        # Lexical rank (only contributes when lexical hit > 0)
+        lex_hits = [s for s in scored if s[1] > 0.0]
+        for rank, (idx, *_) in enumerate(sorted(lex_hits, key=lambda x: x[1], reverse=True), start=1):
+            rrf[idx] += 2.2 / (k + rank)
+
+        # Vector similarity rank (only contributes when positive similarity)
+        if query_embedding:
+            vec_hits = [s for s in scored if s[2] > 0.0]
+            for rank, (idx, *_) in enumerate(sorted(vec_hits, key=lambda x: x[2], reverse=True), start=1):
+                rrf[idx] += 2.0 / (k + rank)
+
+        # Importance and recency prior
+        for rank, (idx, *_) in enumerate(sorted(scored, key=lambda x: x[3], reverse=True), start=1):
+            rrf[idx] += 1.0 / (k + rank)
+        for rank, (idx, *_) in enumerate(sorted(scored, key=lambda x: x[4], reverse=True), start=1):
+            rrf[idx] += 0.6 / (k + rank)
+
+        ranked_indices = sorted(range(len(candidates)), key=lambda i: rrf[i], reverse=True)
+        return [candidates[i] for i in ranked_indices[:limit]]
+
     async def assemble_context(
         self,
         session: AsyncSession,
@@ -124,6 +205,8 @@ class MemoryService:
         sender_qq: int,
         group_id: int | None = None,
         working_limit: int = 16,
+        query_text: str = "",
+        query_embedding: list[float] | None = None,
     ) -> dict[str, Any]:
         """Retrieve all 5 memory layers with STRICT SQL-level public/private semi-isolation.
 
@@ -185,30 +268,55 @@ class MemoryService:
             )
             ambient_summaries = [s.summary_text for s in (await session.execute(amb_stmt)).scalars().all()]
 
-        # L3 Episodic Memory (SQL-enforced semi-isolation!)
-        if scene == "group":
-            ep_stmt = (
-                select(MemoryEpisode)
-                .where(
-                    MemoryEpisode.scope == "public_group",
-                    or_(MemoryEpisode.group_id == group_id, MemoryEpisode.qq_id == sender_qq),
-                )
-                .order_by(MemoryEpisode.importance.desc(), MemoryEpisode.created_at.desc())
-                .limit(8)
+        # L3 Episodic Memory (SQL-enforced semi-isolation + optional Hybrid FTS/Vector/RRF recall!)
+        ep_limit = 8 if scene == "group" else 10
+        iso_filter = (
+            and_(
+                MemoryEpisode.scope == "public_group",
+                or_(MemoryEpisode.group_id == group_id, MemoryEpisode.qq_id == sender_qq),
             )
+            if scene == "group"
+            else or_(
+                and_(MemoryEpisode.scope == "private_dm", MemoryEpisode.qq_id == sender_qq),
+                and_(MemoryEpisode.scope == "public_group", MemoryEpisode.qq_id == sender_qq),
+            )
+        )
+        clean_query = (query_text or "").strip()
+        recall_mode = "default"
+        candidate_count = 0
+        if clean_query or query_embedding:
+            recall_mode = "hybrid"
+            cand_stmt = (
+                select(MemoryEpisode)
+                .where(iso_filter)
+                .order_by(MemoryEpisode.importance.desc(), MemoryEpisode.created_at.desc())
+                .limit(50)
+            )
+            candidates = list((await session.execute(cand_stmt)).scalars().all())
+            pg_fts_ranks: dict[int, float] = {}
+            bind = session.get_bind() if hasattr(session, "get_bind") else None
+            dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+            if dialect_name == "postgresql" and clean_query and candidates:
+                try:
+                    fts_sql = select(
+                        MemoryEpisode.id,
+                        text("ts_rank_cd(tsv, websearch_to_tsquery('simple', :q)) AS fts_rank").bindparams(q=clean_query),
+                    ).where(iso_filter, text("tsv @@ websearch_to_tsquery('simple', :q)").bindparams(q=clean_query))
+                    for eid, rnk in (await session.execute(fts_sql)).all():
+                        pg_fts_ranks[int(eid)] = float(rnk or 0.0)
+                except Exception:
+                    pg_fts_ranks = {}
+            candidate_count = len(candidates)
+            episodes = self._hybrid_rank_episodes(candidates, clean_query, query_embedding, pg_fts_ranks, ep_limit)
         else:
             ep_stmt = (
                 select(MemoryEpisode)
-                .where(
-                    or_(
-                        and_(MemoryEpisode.scope == "private_dm", MemoryEpisode.qq_id == sender_qq),
-                        and_(MemoryEpisode.scope == "public_group", MemoryEpisode.qq_id == sender_qq),
-                    )
-                )
+                .where(iso_filter)
                 .order_by(MemoryEpisode.importance.desc(), MemoryEpisode.created_at.desc())
-                .limit(10)
+                .limit(ep_limit)
             )
-        episodes = list((await session.execute(ep_stmt)).scalars().all())
+            episodes = list((await session.execute(ep_stmt)).scalars().all())
+            candidate_count = len(episodes)
 
         # L4 Acquaintance Card (Strict Semi-Isolation) & Approved Group Expressions
         identity = await session.get(QQIdentity, sender_qq)
@@ -280,6 +388,11 @@ class MemoryService:
             "l4_acquaintance": acquaintance_card,
             "l4_group_slang": approved_slang,
             "l5_self_state": self_state,
+            "l3_recall_meta": {
+                "mode": recall_mode,
+                "candidate_count": candidate_count,
+                "recalled_count": len(episodes),
+            },
         }
 
     async def forget_user_data(

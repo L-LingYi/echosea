@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 
@@ -17,11 +18,11 @@ router = APIRouter(tags=["snowluma_onebot"])
 def _verify_onebot_token(expected: str, auth_header: str | None, query_token: str | None) -> bool:
     if not expected:
         return True
-    if query_token and query_token == expected:
+    if query_token and hmac.compare_digest(query_token, expected):
         return True
     if auth_header:
         token = auth_header.replace("Bearer ", "").replace("Token ", "").strip()
-        return token == expected
+        return hmac.compare_digest(token, expected)
     return False
 
 
@@ -53,15 +54,16 @@ async def snowluma_reverse_ws(
             if runtime.shutting_down:
                 continue
             async def _handle_bg(ev: dict) -> None:
-                async with runtime.db_manager.session_factory() as session:
-                    try:
-                        await runtime.pipeline.handle_raw_onebot_event(session, ev)
-                        await session.commit()
-                    except Exception as exc:
-                        await session.rollback()
-                        logger.exception("Error processing SnowLuma WS event: %s", exc)
+                try:
+                    await runtime.pipeline.enqueue_or_handle_raw_event(runtime.db_manager.session_factory, ev)
+                except Exception as exc:
+                    logger.exception("Error processing SnowLuma WS event: %s", exc)
 
-            asyncio.create_task(_handle_bg(data))
+            task = asyncio.create_task(_handle_bg(data), name="onebot_reverse_ws_event")
+            tasks = getattr(runtime, "in_flight_tasks", None)
+            if isinstance(tasks, set):
+                tasks.add(task)
+                task.add_done_callback(tasks.discard)
     except WebSocketDisconnect:
         logger.warning("SnowLuma Reverse WebSocket disconnected")
     finally:

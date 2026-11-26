@@ -203,9 +203,10 @@ def test_token_only_dashboard_without_money_ui():
     app = create_app(settings_override=settings, force_memory_store=True)
     with TestClient(app) as client:
         html = client.get("/").text
-        assert "今日 Token 消耗" in html
-        assert "今日费用 / 预算" not in html
-        assert "预估费用 (USD)" not in html
+        dash_js = client.get("/static/js/dashboard.js").text
+        assert "今日 Token 消耗" in dash_js
+        assert "今日费用 / 预算" not in (html + dash_js)
+        assert "预估费用 (USD)" not in (html + dash_js)
         token = client.post("/api/auth/login", json={"username": "admin", "password": "V135TestPassword!"}).json()["access_token"]
         dash = client.get("/api/dashboard/overview?days=7", headers={"Authorization": f"Bearer {token}"}).json()
         assert "today_total_tokens" in dash["tokens"]

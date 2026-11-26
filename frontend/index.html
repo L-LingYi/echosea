@@ -3,360 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>EchoSea（回声海）v1.5.4 · 云端意识总控台</title>
-<style>
-  :root {
-    color-scheme: light;
-    --bg: #f4f6fb;
-    --surface: #ffffff;
-    --surface-2: #f8fafc;
-    --ink: #0f172a;
-    --ink2: #334155;
-    --mute: #64748b;
-    --border: #e5e7eb;
-    --border-soft: #f1f5f9;
-    --accent: #4f46e5;
-    --accent-2: #2563eb;
-    --accent-soft: #eef2ff;
-    --purple-bg: #f3e8ff;
-    --purple-ink: #7e22ce;
-    --ok: #10b981;
-    --ok-bg: #ecfdf5;
-    --ok-ink: #047857;
-    --warn: #f59e0b;
-    --warn-bg: #fffbeb;
-    --warn-ink: #b45309;
-    --danger: #ef4444;
-    --danger-bg: #fef2f2;
-    --danger-ink: #b91c1c;
-    --sidebar: #090e1a;
-    --sidebar-border: #1e293b;
-    --sidebar-ink: #94a3b8;
-    --radius: 16px;
-    --radius-sm: 10px;
-    --shadow-sm: 0 1px 2px rgba(15, 23, 42, .04);
-    --shadow: 0 6px 24px rgba(15, 23, 42, .06);
-    --shadow-lg: 0 24px 60px rgba(2, 6, 23, .24);
-  }
-  [data-theme="dark"] {
-    color-scheme: dark;
-    --bg: #0b1120;
-    --surface: #111827;
-    --surface-2: #1e293b;
-    --ink: #f1f5f9;
-    --ink2: #cbd5e1;
-    --mute: #94a3b8;
-    --border: #293548;
-    --border-soft: #1e293b;
-    --accent: #818cf8;
-    --accent-2: #60a5fa;
-    --accent-soft: rgba(99, 102, 241, .18);
-    --purple-bg: rgba(168, 85, 247, .18);
-    --purple-ink: #c084fc;
-    --ok-bg: rgba(16, 185, 129, .16);
-    --ok-ink: #34d399;
-    --warn-bg: rgba(245, 158, 11, .16);
-    --warn-ink: #fbbf24;
-    --danger-bg: rgba(239, 68, 68, .16);
-    --danger-ink: #f87171;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .25);
-    --shadow: 0 6px 24px rgba(0, 0, 0, .35);
-    --shadow-lg: 0 24px 60px rgba(0, 0, 0, .55);
-  }
-  [data-theme="dark"] code { background: #1e293b; color: #e2e8f0; }
-  [data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea {
-    background: #0f172a; color: var(--ink); border-color: var(--border);
-  }
-  [data-theme="dark"] input::placeholder, [data-theme="dark"] textarea::placeholder { color: #64748b; }
-  [data-theme="dark"] input[type="file"]::file-selector-button {
-    background: var(--surface-2); color: var(--ink2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
-  }
-  [data-theme="dark"] .login-card { background: #111827; border-color: #334155; color: var(--ink); }
-  [data-theme="dark"] .mobile-bottom-nav { background: rgba(17, 24, 39, .94); }
-  [data-theme="dark"] .seg-bar { background: #0f172a; border: 1px solid var(--border); }
-  [data-theme="dark"] .seg-btn.active { background: var(--surface-2); color: var(--accent); box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
-  [data-theme="dark"] .progress-track { background: #1e293b; }
-  [data-theme="dark"] .btn.secondary { background: var(--surface-2); color: var(--ink2); border-color: var(--border); }
-  [data-theme="dark"] .btn.secondary:hover { background: #263449; border-color: #475569; color: var(--ink); }
-  [data-theme="dark"] .provider-card:hover { border-color: rgba(129, 140, 248, .5); }
-  [data-theme="dark"] .modal-box { background: var(--surface); border-color: #334155; }
-  [data-theme="dark"] tbody tr:hover { background: rgba(255, 255, 255, .04); }
-  [data-theme="dark"] .toast { background: #1e293b; border: 1px solid #334155; }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body {
-    margin: 0; padding: 0; background: var(--bg); color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
-    font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased;
-  }
-  .hidden { display: none !important; }
-  code { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f1f5f9; padding: 2px 6px; border-radius: 6px; color: #334155; }
-
-  /* Login */
-  .login-wrap {
-    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px;
-    background: radial-gradient(circle at 18% 20%, #312e81 0%, #090e1a 52%, #020617 100%);
-  }
-  .login-card {
-    width: 100%; max-width: 408px; background: rgba(255,255,255,.98); border-radius: 22px;
-    padding: 36px 30px; box-shadow: 0 30px 70px rgba(2,6,23,.55); border: 1px solid rgba(255,255,255,.6);
-  }
-  .login-logo {
-    width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center;
-    background: linear-gradient(135deg, #4f46e5, #06b6d4); color: #fff; font-weight: 800; font-size: 20px;
-    margin-bottom: 16px; box-shadow: 0 10px 24px rgba(79,70,229,.35);
-  }
-  .login-card h1 { margin: 0 0 4px; font-size: 23px; font-weight: 800; letter-spacing: -0.025em; }
-  .login-card p { margin: 0 0 24px; color: var(--mute); font-size: 13px; }
-
-  /* App Shell */
-  .app { display: flex; min-height: 100vh; }
-  .sidebar {
-    width: 256px; background: var(--sidebar); color: var(--sidebar-ink);
-    padding: 20px 14px; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0;
-    position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 40;
-    border-right: 1px solid var(--sidebar-border);
-  }
-  .brand {
-    display: flex; align-items: center; gap: 12px; color: #fff; font-weight: 700; font-size: 15.5px;
-    padding: 6px 10px 18px; border-bottom: 1px solid var(--sidebar-border); margin-bottom: 10px;
-  }
-  .brand-orb {
-    width: 36px; height: 36px; border-radius: 11px; flex-shrink: 0;
-    background: linear-gradient(135deg, #4f46e5, #06b6d4); display: grid; place-items: center;
-    color: #fff; font-weight: 800; font-size: 16px; box-shadow: 0 6px 18px rgba(79,70,229,.4);
-  }
-  .brand small { display: block; color: #64748b; font-weight: 500; font-size: 11.5px; margin-top: 1px; }
-  .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #475569; padding: 12px 12px 4px; font-weight: 700; }
-  .nav-btn {
-    background: transparent; border: 0; color: var(--sidebar-ink); text-align: left;
-    padding: 10px 12px; border-radius: 11px; cursor: pointer; font-size: 13.5px; font-weight: 500;
-    display: flex; align-items: center; gap: 10px; transition: all .16s ease; min-height: 41px;
-  }
-  .nav-btn:hover { background: rgba(255,255,255,.06); color: #f8fafc; }
-  .nav-btn.active {
-    background: linear-gradient(135deg, #4f46e5, #2563eb); color: #fff; font-weight: 600;
-    box-shadow: 0 6px 18px rgba(79,70,229,.38);
-  }
-  .sidebar-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--sidebar-border); font-size: 12px; color: #94a3b8; }
-
-  /* Mobile Bars */
-  .mobile-bar {
-    display: none; position: sticky; top: 0; z-index: 30;
-    background: rgba(9, 14, 26, 0.94); backdrop-filter: blur(14px); color: #fff;
-    padding: 10px 14px; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid rgba(255,255,255,.08);
-  }
-  .mobile-menu-btn {
-    background: rgba(255,255,255,.1); border: 0; color: #fff; width: 38px; height: 38px;
-    border-radius: 11px; font-size: 17px; cursor: pointer; display: grid; place-items: center;
-  }
-  .drawer-backdrop { display: none; position: fixed; inset: 0; background: rgba(2,6,23,.6); backdrop-filter: blur(2px); z-index: 35; }
-  .mobile-bottom-nav {
-    display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-    background: rgba(255,255,255,.94); backdrop-filter: blur(16px);
-    border-top: 1px solid var(--border); padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
-    grid-template-columns: repeat(5, 1fr); gap: 4px;
-  }
-  .mb-btn {
-    background: transparent; border: 0; color: var(--mute); font-size: 11px; font-weight: 600;
-    padding: 6px 2px; border-radius: 10px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  }
-  .mb-btn.active { color: var(--accent); background: var(--accent-soft); }
-  .mb-ico { font-size: 17px; line-height: 1; }
-
-  /* Main Content */
-  .main { flex: 1; padding: 28px 34px 48px; min-width: 0; max-width: 1440px; }
-  .page-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
-  .page-head h2 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.025em; color: var(--ink); }
-  .page-sub { color: var(--mute); font-size: 13px; margin-top: 3px; }
-
-  /* Segmented Switcher */
-  .seg-bar { display: inline-flex; background: #e2e8f0; padding: 4px; border-radius: 12px; gap: 4px; margin-bottom: 18px; flex-wrap: wrap; }
-  .seg-btn { border: 0; background: transparent; color: var(--ink2); padding: 7px 15px; border-radius: 9px; font-weight: 600; font-size: 13px; cursor: pointer; transition: .15s; }
-  .seg-btn.active { background: #fff; color: var(--accent); box-shadow: 0 2px 8px rgba(15,23,42,.08); }
-
-  /* Grids & Cards */
-  .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
-  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
-  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-bottom: 20px; }
-  .card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 20px 22px; margin-bottom: 18px; box-shadow: var(--shadow-sm); transition: box-shadow .18s ease;
-  }
-  .card:hover { box-shadow: var(--shadow); }
-  .card h3 { margin: 0 0 14px; font-size: 15.5px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; }
-
-  .kpi-card { position: relative; padding: 18px 20px; }
-  .kpi-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-  .kpi-label { color: var(--mute); font-size: 12.5px; font-weight: 600; }
-  .kpi-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); font-size: 15px; }
-  .kpi-val { font-size: 26px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.2; }
-  .kpi-sub { color: var(--mute); font-size: 12px; margin-top: 8px; }
-  .progress-track { height: 7px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-top: 8px; }
-  .progress-fill { height: 100%; border-radius: 999px; transition: width .35s ease; }
-
-  /* Visual Bar Rows (replaces ugly JSON dumps!) */
-  .bar-row { margin-bottom: 12px; }
-  .bar-meta { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 4px; color: var(--ink2); font-weight: 500; }
-
-  /* Badges & Pills */
-  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-  .badge.ok { background: var(--ok-bg); color: var(--ok-ink); }
-  .badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
-  .badge.err { background: var(--danger-bg); color: var(--danger-ink); }
-  .badge.info { background: var(--accent-soft); color: var(--accent); }
-  .badge.purple { background: var(--purple-bg); color: var(--purple-ink); }
-  .pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
-
-  /* Buttons & Inputs */
-  label { display: block; font-size: 12px; font-weight: 600; color: var(--ink2); margin: 10px 0 5px; }
-  input, select, textarea {
-    width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
-    font-size: 13.5px; font-family: inherit; background: #fff; color: var(--ink); transition: .15s;
-  }
-  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
-  textarea { min-height: 82px; resize: vertical; }
-  .btn {
-    background: linear-gradient(135deg, #4f46e5, #2563eb); color: #fff; border: 0;
-    padding: 9px 16px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 13px;
-    min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    transition: all .15s ease; box-shadow: 0 2px 8px rgba(79,70,229,.22);
-  }
-  .btn:hover { filter: brightness(1.06); transform: translateY(-0.5px); }
-  .btn.secondary { background: #fff; color: var(--ink2); border: 1px solid var(--border); box-shadow: none; }
-  .btn.secondary:hover { background: #f8fafc; border-color: #cbd5e1; }
-  .btn.danger { background: linear-gradient(135deg, #dc2626, #ef4444); box-shadow: 0 2px 8px rgba(239,68,68,.2); }
-  .btn.sm { padding: 5px 11px; font-size: 12px; min-height: 31px; border-radius: 8px; }
-  .row-actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
-
-  /* Tables */
-  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 540px; }
-  th, td { text-align: left; padding: 12px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
-  th { color: var(--mute); font-weight: 600; background: var(--surface-2); font-size: 12px; white-space: nowrap; }
-  tbody tr:hover { background: #f8fafc; }
-
-  /* Provider Cards & Sticker Visual Gallery */
-  .provider-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
-    display: flex; flex-direction: column; gap: 10px; transition: .18s;
-  }
-  .provider-card:hover { border-color: #c7d2fe; box-shadow: var(--shadow); }
-  .sticker-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
-    display: flex; flex-direction: column; transition: .18s;
-  }
-  .sticker-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
-  .sticker-thumb {
-    height: 200px; background: var(--surface-2); display: flex; align-items: center; justify-content: center;
-    overflow: hidden; position: relative; padding: 8px;
-  }
-  .sticker-thumb img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; border-radius: 6px; }
-  .sticker-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
-  .sticker-hint { font-size: 12.5px; color: var(--ink2); background: var(--surface-2); padding: 7px 9px; border-radius: 8px; line-height: 1.45; }
-
-  /* Modal Sheet */
-  .modal-mask {
-    position: fixed; inset: 0; background: rgba(9,14,26,.55); backdrop-filter: blur(4px);
-    display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 100;
-  }
-  .modal-box {
-    width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 24px 26px; box-shadow: var(--shadow-lg);
-  }
-  .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-  .modal-head h3 { margin: 0; font-size: 18px; }
-
-  /* Consciousness Sea (意识海) */
-  .sea-shell {
-    background: radial-gradient(ellipse at 50% 42%, #131c44 0%, #070d1f 64%, #020617 100%);
-    border-radius: 18px; border: 1px solid #1e293b; overflow: hidden; position: relative;
-    color: #e2e8f0; box-shadow: 0 22px 54px rgba(2, 6, 23, .38);
-  }
-  .sea-toolbar {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between;
-    padding: 12px 16px; background: rgba(15, 23, 42, .8); border-bottom: 1px solid rgba(148,163,184,.16);
-    backdrop-filter: blur(10px);
-  }
-  .sea-filters { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip {
-    border: 1px solid rgba(148,163,184,.25); background: rgba(30,41,59,.68); color: #cbd5e1;
-    padding: 5px 11px; border-radius: 999px; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: .15s;
-  }
-  .chip.on { border-color: #818cf8; background: rgba(79,70,229,.35); color: #fff; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .sea-stage { position: relative; height: 550px; width: 100%; touch-action: none; }
-  #seaCanvas { width: 100%; height: 100%; display: block; cursor: grab; }
-  #seaCanvas:active { cursor: grabbing; }
-  .sea-inspector {
-    position: absolute; right: 16px; top: 16px; width: 304px; max-width: calc(100% - 32px);
-    background: rgba(15, 23, 42, .92); backdrop-filter: blur(14px);
-    border: 1px solid rgba(148,163,184,.24); border-radius: 14px; padding: 16px 18px;
-    color: #f8fafc; font-size: 12.5px; max-height: calc(100% - 32px); overflow-y: auto;
-  }
-  .sea-inspector h4 { margin: 0 0 6px; font-size: 16px; color: #fff; }
-  .sea-kv { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(148,163,184,.14); font-size: 12px; }
-  .sea-stat-bar {
-    position: absolute; left: 16px; bottom: 14px; background: rgba(15,23,42,.78);
-    padding: 6px 13px; border-radius: 999px; font-size: 11.5px; color: #94a3b8;
-    border: 1px solid rgba(148,163,184,.18); pointer-events: none;
-  }
-
-  /* Usage Bar Chart */
-  .usage-chart-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
-  .usage-chart-head h3 { margin: 0; }
-  .usage-chart-head .seg-bar { margin-bottom: 0; }
-  .usage-meta { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12.5px; color: var(--mute); margin-bottom: 12px; min-height: 22px; }
-  .usage-bars {
-    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px;
-    align-items: end; height: 184px; padding: 22px 8px 4px;
-    background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 12px;
-  }
-  .usage-bar-col {
-    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-    gap: 6px; cursor: pointer; position: relative; min-width: 0;
-  }
-  .usage-bar-val {
-    font-size: 10.5px; color: var(--mute); font-weight: 600; white-space: nowrap;
-    line-height: 1; min-height: 12px;
-  }
-  .usage-bar-track {
-    width: 100%; max-width: 34px; flex: 1; display: flex; align-items: flex-end; justify-content: center;
-  }
-  .usage-bar-fill {
-    width: 100%; min-height: 3px; border-radius: 6px 6px 2px 2px;
-    background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
-    transition: height .25s ease, filter .15s ease;
-  }
-  .usage-bar-col:hover .usage-bar-fill, .usage-bar-col.active .usage-bar-fill {
-    filter: brightness(1.18); box-shadow: 0 0 0 2px var(--accent-soft);
-  }
-  .usage-bar-col.zero .usage-bar-fill { opacity: .28; }
-  .usage-bar-lbl {
-    font-size: 11px; color: var(--mute); white-space: nowrap; line-height: 12px;
-    min-height: 12px; height: 12px;
-  }
-
-  .empty-state { text-align: center; padding: 34px 16px; color: var(--mute); font-size: 13px; }
-  .toast {
-    position: fixed; right: 20px; bottom: 24px; background: #0f172a; color: #fff;
-    padding: 11px 18px; border-radius: 12px; font-size: 13px; font-weight: 500; z-index: 999;
-    box-shadow: 0 14px 34px rgba(0,0,0,.32);
-  }
-
-  /* Responsive */
-  @media (max-width: 1100px) { .grid-4, .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2 { grid-template-columns: 1fr; } }
-  @media (max-width: 768px) {
-    .app { flex-direction: column; } .mobile-bar { display: flex; } .mobile-bottom-nav { display: grid; }
-    .sidebar { position: fixed; left: -270px; top: 0; bottom: 0; height: 100vh; width: 258px; transition: left .22s ease; box-shadow: 8px 0 32px rgba(2,6,23,.5); }
-    .sidebar.open { left: 0; } .drawer-backdrop.open { display: block; }
-    .main { padding: 16px 14px 88px; } .page-head h2 { font-size: 20px; }
-    .grid-3 { grid-template-columns: 1fr; }
-    .card { padding: 15px; border-radius: 14px; } .kpi-val { font-size: 21px; }
-    .sea-stage { height: 430px; } .sea-inspector { position: static; width: 100%; max-width: 100%; border-radius: 0; border: 0; border-top: 1px solid rgba(148,163,184,.2); }
-    .toast { left: 14px; right: 14px; bottom: 78px; text-align: center; }
-  }
-</style>
+<title>EchoSea（回声海）v1.8.0 · 云端意识总控台</title>
+<link rel="stylesheet" href="/static/css/app.css" />
 </head>
 <body>
 
@@ -369,7 +17,7 @@
         <path d="M6.5 7.2a8 8 0 0 1 11 0" opacity=".7" />
       </svg>
     </div>
-    <h1>EchoSea · 回声海 v1.5.4</h1>
+    <h1>EchoSea · 回声海 v1.8.0</h1>
     <p>SnowLuma 网关 · 记忆意识海 · 云端陪伴总控台</p>
     <form id="loginForm">
       <label>管理员账号</label><input id="loginUser" value="admin" autocomplete="username" required />
@@ -383,11 +31,11 @@
 
 <div id="appView" class="app hidden">
   <header class="mobile-bar">
-    <button class="mobile-menu-btn" onclick="toggleDrawer()" aria-label="菜单">☰</button>
+    <button class="mobile-menu-btn" data-action="toggle-drawer" aria-label="菜单">☰</button>
     <div style="font-weight:700;font-size:15px;">EchoSea · 意识总控台</div>
-    <button class="mobile-menu-btn" onclick="refreshCurrentTab()" aria-label="刷新">↻</button>
+    <button class="mobile-menu-btn" data-action="refresh-tab" aria-label="刷新">↻</button>
   </header>
-  <div id="drawerBackdrop" class="drawer-backdrop" onclick="toggleDrawer(false)"></div>
+  <div id="drawerBackdrop" class="drawer-backdrop" data-action="close-drawer"></div>
 
   <aside id="sidebar" class="sidebar">
     <div class="brand">
@@ -398,7 +46,7 @@
           <path d="M6.5 7.2a8 8 0 0 1 11 0" opacity=".7" />
         </svg>
       </div>
-      <div>EchoSea · 回声海<small>v1.5.4 · SnowLuma &amp; Jev</small></div>
+      <div>EchoSea · 回声海<small>v1.8.0 · SnowLuma &amp; Jev</small></div>
     </div>
     <div class="nav-group">核心观测</div>
     <button class="nav-btn active" data-tab="dashboard">📊 运行仪表盘</button>
@@ -414,8 +62,8 @@
     <button class="nav-btn" data-tab="alerts">🔔 24h 告警通知</button>
     <div class="sidebar-foot">
       <div id="userInfo" style="margin-bottom:10px;">已登录</div>
-      <button class="btn secondary sm" id="themeToggleBtn" style="width:100%;margin-bottom:8px;" onclick="toggleTheme()">🌙 深色模式</button>
-      <button class="btn secondary sm" style="width:100%;" onclick="logout()">退出登录</button>
+      <button class="btn secondary sm" id="themeToggleBtn" style="width:100%;margin-bottom:8px;" data-action="toggle-theme">🌙 深色模式</button>
+      <button class="btn secondary sm" style="width:100%;" data-action="logout">退出登录</button>
     </div>
   </aside>
 
@@ -424,7 +72,7 @@
     <section id="tab-dashboard">
       <div class="page-head">
         <div><h2>运行仪表盘</h2><div class="page-sub">实时生产指标（已剔除健康探针）· 语音三态与门卫放行可视化</div></div>
-        <button class="btn secondary sm" onclick="loadDashboard()">↻ 刷新数据</button>
+        <button class="btn secondary sm" data-action="load-dashboard">↻ 刷新数据</button>
       </div>
       <div class="grid-4" id="kpiRow"></div>
       <div class="grid-2">
@@ -435,8 +83,8 @@
         <div class="usage-chart-head">
           <h3>📊 总消耗柱状统计</h3>
           <div class="seg-bar">
-            <button class="seg-btn active" data-ugran="daily" onclick="switchUsageGranularity('daily')">按天（近 30 天）</button>
-            <button class="seg-btn" data-ugran="hourly" onclick="switchUsageGranularity('hourly')">按小时（最近 24 小时）</button>
+            <button class="seg-btn active" data-ugran="daily" data-action="usage-daily">按天（近 30 天）</button>
+            <button class="seg-btn" data-ugran="hourly" data-action="usage-hourly">按小时（最近 24 小时）</button>
           </div>
         </div>
         <div id="usageChartMeta" class="usage-meta">加载中...</div>
@@ -453,14 +101,14 @@
       <div class="page-head">
         <div><h2>记忆意识海</h2><div class="page-sub">五层记忆关联星图、熟人卡半隔离管理、边缘旁听与一键忘却</div></div>
         <div class="row-actions">
-          <button class="btn sm secondary" onclick="loadConsciousnessSea(true)">✨ 演示星图</button>
-          <button class="btn sm" onclick="loadUnifiedMemory()">↻ 刷新记忆</button>
+          <button class="btn sm secondary" data-action="sea-demo">✨ 演示星图</button>
+          <button class="btn sm" data-action="sea-refresh">↻ 刷新记忆</button>
         </div>
       </div>
       <div class="seg-bar">
-        <button class="seg-btn active" data-mview="graph" onclick="switchMemoryView('graph')">🌌 意识海星图</button>
-        <button class="seg-btn" data-mview="identities" onclick="switchMemoryView('identities')">👥 熟人卡与一键忘却</button>
-        <button class="seg-btn" data-mview="ambient" onclick="switchMemoryView('ambient')">🌊 边缘旁听与群黑话</button>
+        <button class="seg-btn active" data-mview="graph" data-action="mview-graph">🌌 意识海星图</button>
+        <button class="seg-btn" data-mview="identities" data-action="mview-identities">👥 熟人卡与一键忘却</button>
+        <button class="seg-btn" data-mview="ambient" data-action="mview-ambient">🌊 边缘旁听与群黑话</button>
       </div>
 
       <div id="mview-graph">
@@ -476,9 +124,9 @@
               <button class="chip on" data-layer="L4_slang"><span class="dot" style="background:#fb923c"></span>群黑话</button>
             </div>
             <div class="row-actions">
-              <button class="chip" onclick="seaZoom(1.2)">＋</button>
-              <button class="chip" onclick="seaZoom(0.83)">－</button>
-              <button class="chip" onclick="seaResetView()">重置视角</button>
+              <button class="chip" data-action="sea-zoom-in">＋</button>
+              <button class="chip" data-action="sea-zoom-out">－</button>
+              <button class="chip" data-action="sea-reset">重置视角</button>
             </div>
           </div>
           <div class="sea-stage">
@@ -511,30 +159,30 @@
     <section id="tab-traces" class="hidden">
       <div class="page-head">
         <div><h2>全链路请求追踪（脱敏）</h2><div class="page-sub">统一 request_id 串联入站、门卫、主脑、TTS 与 OneBot 回执，零正文泄露</div></div>
-        <button class="btn secondary sm" onclick="loadTraces()">↻ 刷新追踪</button>
+        <button class="btn secondary sm" data-action="load-traces">↻ 刷新追踪</button>
       </div>
-      <div class="card"><div class="table-wrap"><table><thead><tr><th>Request ID</th><th>场景 / 群</th><th>阶段</th><th>状态</th><th>耗时</th><th>异常类型</th><th>时间</th></tr></thead><tbody id="traceTable"></tbody></table></div></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>Request ID</th><th>场景 / 群</th><th>阶段</th><th>状态</th><th>耗时</th><th>异常 / 召回元信息</th><th>时间</th></tr></thead><tbody id="traceTable"></tbody></table></div></div>
     </section>
 
-    <!-- 4. Model Control Center (Clean Card Grid + Modal Editor) -->
+    <!-- 4. Model Control Center -->
     <section id="tab-providers" class="hidden">
       <div class="page-head">
         <div><h2>模型接入总控中心</h2><div class="page-sub">支持 OpenAI 兼容与 TypeSafe AI Jev 原生协议 · 局部更新安全保留扩展配置</div></div>
         <div class="row-actions">
-          <button class="btn sm secondary" onclick="loadProviders()">↻ 刷新</button>
-          <button class="btn sm" onclick="openProviderModal()">＋ 新增 / 配置槽位</button>
+          <button class="btn sm secondary" data-action="load-providers">↻ 刷新</button>
+          <button class="btn sm" data-action="open-provider-modal">＋ 新增 / 配置槽位</button>
         </div>
       </div>
       <div class="grid-3" id="providerGrid"></div>
     </section>
 
-    <!-- 5. Sticker Visual Card Gallery with AI Auto-Tagging -->
+    <!-- 5. Sticker Visual Card Gallery -->
     <section id="tab-stickers" class="hidden">
       <div class="page-head">
         <div><h2>表情包自学习图库</h2><div class="page-sub">自动收集群聊高热表情包，并结合上下文理解群友使用场景自动打标签</div></div>
         <div class="row-actions">
-          <button class="btn sm secondary" onclick="document.getElementById('importBox').classList.toggle('hidden')">＋ 批量导入</button>
-          <button class="btn sm" onclick="loadStickers()">↻ 刷新图库</button>
+          <button class="btn sm secondary" data-action="toggle-import-box">＋ 批量导入</button>
+          <button class="btn sm" data-action="load-stickers">↻ 刷新图库</button>
         </div>
       </div>
       <div class="card">
@@ -549,13 +197,13 @@
         <div style="margin-top:14px;padding:12px;border-radius:10px;background:var(--surface-2);border:1px dashed var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
           <span style="font-size:12.5px;font-weight:600;">📁 本地文件导入（JSON / JSONL）：</span>
           <input id="stickerFileInput" type="file" accept=".json,.jsonl,.txt" style="flex:1;min-width:200px;" />
-          <button class="btn sm" onclick="uploadStickerFile()">上传并导入</button>
+          <button class="btn sm" data-action="upload-sticker-file">上传并导入</button>
         </div>
       </div>
       <div id="importBox" class="card hidden">
         <h3>📥 手工批量导入（每行：图片URL|情绪标签逗号分隔|语境说明）</h3>
         <textarea id="stickerImportInput" placeholder="https://example.com/laugh.gif|大笑,吐槽|群友说离谱话时斗图"></textarea>
-        <div style="margin-top:10px;"><button class="btn sm" onclick="importStickers()">导入并启用</button></div>
+        <div style="margin-top:10px;"><button class="btn sm" data-action="import-stickers">导入并启用</button></div>
       </div>
       <div class="grid-3" id="stickerGrid"></div>
     </section>
@@ -567,7 +215,7 @@
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <h3 style="margin:0;">✨ 人设版本列表</h3>
-            <button class="btn sm secondary" onclick="document.getElementById('newPersonaForm').classList.toggle('hidden')">＋ 新建人设</button>
+            <button class="btn sm secondary" data-action="toggle-new-persona">＋ 新建人设</button>
           </div>
           <form id="newPersonaForm" class="hidden" style="margin-bottom:14px;padding:12px;background:var(--surface-2);border-radius:10px;">
             <label>版本标识</label><input id="npTag" placeholder="如 echosea_v3" required />
@@ -588,7 +236,7 @@
           <textarea id="simInput">10001|小呆呆，帮我看看今天吃啥
 10002|小呆呆刚才笑死我了
 10003|晚饭吃麻辣烫还是烧烤？</textarea>
-          <div style="margin-top:10px;"><button class="btn sm" onclick="runSandbox()">▶ 运行门卫回放</button></div>
+          <div style="margin-top:10px;"><button class="btn sm" data-action="run-sandbox">▶ 运行门卫回放</button></div>
           <div id="simResult" style="margin-top:14px;"></div>
         </div>
       </div>
@@ -600,7 +248,7 @@
           <div><label>软切入阈值 (0.3 - 0.95)</label><input id="cfgSoftThr" type="number" step="0.02" value="0.78" /></div>
         </div>
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button class="btn sm" onclick="saveRuntimeConfig()">保存运行参数</button>
+          <button class="btn sm" data-action="save-runtime-config">保存运行参数</button>
           <span id="cfgSavedList" style="font-size:12px;color:var(--mute);"></span>
         </div>
       </div>
@@ -611,8 +259,8 @@
       <div class="page-head">
         <div><h2>热点简报与 24h 作息状态机</h2><div class="page-sub">慢通道背景常识（绝不群发）与角色精力/心情日程驱动</div></div>
         <div class="row-actions">
-          <button class="btn sm" onclick="refreshBriefing()">刷新今日简报</button>
-          <button class="btn sm secondary" onclick="syncSchedule()">同步当前作息</button>
+          <button class="btn sm" data-action="refresh-briefing">刷新今日简报</button>
+          <button class="btn sm secondary" data-action="sync-schedule">同步当前作息</button>
         </div>
       </div>
       <div class="grid-2">
@@ -637,18 +285,18 @@
     <!-- 8. Ops, Plugins & Online Update -->
     <section id="tab-ops" class="hidden">
       <div class="page-head">
-        <div><h2>运维、插件与系统在线更新</h2><div class="page-sub">宿主机签名更新守护进程（失败自动回滚）、离线反思与异地备份</div></div>
+        <div><h2>运维、插件与系统在线更新</h2><div class="page-sub">宿主机签名更新守护进程（失败自动回滚）、离线反思、异地备份与快照恢复</div></div>
         <div class="row-actions">
-          <button class="btn sm secondary" onclick="runReflection()">🌙 触发离线反思</button>
-          <button class="btn sm secondary" onclick="triggerBackup()">💾 触发异地备份</button>
+          <button class="btn sm secondary" data-action="run-reflection">🌙 触发离线反思</button>
+          <button class="btn sm secondary" data-action="trigger-backup">💾 触发异地备份</button>
         </div>
       </div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
           <h3 style="margin:0;">🔄 系统在线更新</h3>
           <div class="row-actions">
-            <button class="btn sm secondary" onclick="checkSystemUpdate()">检查新版本</button>
-            <button class="btn sm" id="updateTrigger" onclick="triggerSystemUpdate()" disabled>安装更新</button>
+            <button class="btn sm secondary" data-action="check-update">检查新版本</button>
+            <button class="btn sm" id="updateTrigger" data-action="trigger-update" disabled>安装更新</button>
           </div>
         </div>
         <div id="updateStatusBox" style="margin-bottom:12px;">加载中...</div>
@@ -659,8 +307,8 @@
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
           <h3 style="margin:0;">☁️ 异地备份配置（阿里云盘 / WebDAV · 自定义路径）</h3>
           <div class="row-actions">
-            <button class="btn sm secondary" onclick="testBackupConn()">测试连接</button>
-            <button class="btn sm" onclick="triggerBackup()">💾 立即备份上传</button>
+            <button class="btn sm secondary" data-action="test-backup-conn">测试连接</button>
+            <button class="btn sm" data-action="trigger-backup">💾 立即备份上传</button>
           </div>
         </div>
         <div id="bkGuideBox" style="margin-bottom:12px;padding:12px 14px;border-radius:10px;background:var(--accent-soft);border:1px solid var(--border);font-size:12.5px;color:var(--ink2);line-height:1.65;"></div>
@@ -668,7 +316,7 @@
           <div class="grid-3">
             <div>
               <label>备份目标类型</label>
-              <select id="bkProvider" onchange="toggleBackupFields()">
+              <select id="bkProvider">
                 <option value="aliyun_openapi">阿里云盘 OpenAPI（OAuth / Refresh Token）</option>
                 <option value="aliyun_webdav">阿里云盘 WebDAV / AList（扫码挂载）</option>
                 <option value="local_only">仅本地打包快照</option>
@@ -690,9 +338,9 @@
                 <input id="bkClientSecret" type="password" placeholder="Client Secret（可选）" />
               </div>
               <div style="display:flex;gap:6px;margin-top:6px;">
-                <button class="btn sm secondary" type="button" onclick="openAliyunOAuth()">获取授权链接</button>
+                <button class="btn sm secondary" type="button" data-action="oauth-aliyun">获取授权链接</button>
                 <input id="bkOAuthCode" placeholder="粘贴回调 code" style="flex:1;padding:5px 8px;" />
-                <button class="btn sm secondary" type="button" onclick="exchangeAliyunCode()">换取 Token</button>
+                <button class="btn sm secondary" type="button" data-action="exchange-aliyun-code">换取 Token</button>
               </div>
             </div>
           </div>
@@ -725,6 +373,13 @@
             <button class="btn sm" type="submit">保存配置并生效</button>
           </div>
         </form>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:12.5px;font-weight:600;">♻️ 快照校验与原子恢复（.json.gz / .json）：</span>
+          <input id="backupRestoreFile" type="file" accept=".gz,.json" style="flex:1;min-width:200px;" />
+          <button class="btn sm secondary" type="button" data-action="dry-run-restore">预检（Dry-Run）</button>
+          <button class="btn sm danger" type="button" data-action="execute-restore">执行恢复</button>
+          <span id="backupRestoreResult" style="font-size:12px;color:var(--mute);"></span>
+        </div>
       </div>
       <div class="grid-2">
         <div class="card"><h3>🧩 已加载标准插件</h3><div id="pluginList">加载中...</div></div>
@@ -740,7 +395,7 @@
           </form>
           <div>
             <div style="font-size:13px;color:var(--ink2);margin-bottom:8px;">为公网访问开启 TOTP 动态口令（支持 Google Authenticator / 1Password）。</div>
-            <button class="btn sm secondary" onclick="setupTotp()">生成 TOTP 密钥</button>
+            <button class="btn sm secondary" data-action="setup-totp">生成 TOTP 密钥</button>
             <div id="totpSetupBox" style="margin-top:8px;font-size:12.5px;"></div>
           </div>
         </div>
@@ -749,7 +404,7 @@
 
     <!-- 9. Alerts -->
     <section id="tab-alerts" class="hidden">
-      <div class="page-head"><div><h2>24h 异常告警通知</h2><div class="page-sub">掉线、API 连续报错、额度冷却切备路与备份/更新失败实时推送</div></div><button class="btn sm" onclick="sendTestAlert()">发送测试告警</button></div>
+      <div class="page-head"><div><h2>24h 异常告警通知</h2><div class="page-sub">掉线、API 连续报错、额度冷却切备路与备份/更新失败实时推送</div></div><button class="btn sm" data-action="send-test-alert">发送测试告警</button></div>
       <div class="card">
         <form id="alertForm" class="grid-2">
           <div>
@@ -768,20 +423,20 @@
   </main>
 
   <nav class="mobile-bottom-nav">
-    <button class="mb-btn active" data-tab="dashboard" onclick="switchTab('dashboard')"><span class="mb-ico">📊</span>仪表盘</button>
-    <button class="mb-btn" data-tab="sea" onclick="switchTab('sea')"><span class="mb-ico">🌌</span>记忆海</button>
-    <button class="mb-btn" data-tab="providers" onclick="switchTab('providers')"><span class="mb-ico">🧠</span>模型</button>
-    <button class="mb-btn" data-tab="stickers" onclick="switchTab('stickers')"><span class="mb-ico">🎭</span>表情包</button>
-    <button class="mb-btn" onclick="toggleDrawer(true)"><span class="mb-ico">☰</span>更多</button>
+    <button class="mb-btn active" data-tab="dashboard"><span class="mb-ico">📊</span>仪表盘</button>
+    <button class="mb-btn" data-tab="sea"><span class="mb-ico">🌌</span>记忆海</button>
+    <button class="mb-btn" data-tab="providers"><span class="mb-ico">🧠</span>模型</button>
+    <button class="mb-btn" data-tab="stickers"><span class="mb-ico">🎭</span>表情包</button>
+    <button class="mb-btn" data-action="open-drawer"><span class="mb-ico">☰</span>更多</button>
   </nav>
 </div>
 
 <!-- Provider Modal Editor -->
-<div id="providerModal" class="modal-mask hidden" onclick="if(event.target===this) closeProviderModal()">
+<div id="providerModal" class="modal-mask hidden">
   <div class="modal-box">
     <div class="modal-head">
       <h3 id="providerFormTitle">新增 / 配置模型槽位</h3>
-      <button class="btn sm secondary" type="button" onclick="closeProviderModal()">✕</button>
+      <button class="btn sm secondary" type="button" data-action="close-provider-modal">✕</button>
     </div>
     <form id="providerForm" class="grid-2" style="margin-bottom:0;">
       <div>
@@ -811,7 +466,7 @@
         <label>扩展配置 JSON（留空保留原值）</label>
         <textarea id="pExtra" style="min-height:66px;" placeholder='如 {"extra_headers":{}, "appid":"..."}'></textarea>
         <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
-          <button class="btn sm secondary" type="button" onclick="closeProviderModal()">取消</button>
+          <button class="btn sm secondary" type="button" data-action="close-provider-modal">取消</button>
           <button class="btn sm" type="submit">保存并热生效</button>
         </div>
       </div>
@@ -820,758 +475,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-
-<script>
-let TOKEN = localStorage.getItem('companion_token') || '';
-let CURRENT_TAB = 'dashboard';
-let PROVIDERS_CACHE = [];
-let LAST_CHECKED_REF = '';
-let USAGE_SERIES_CACHE = { daily: [], hourly: [] };
-let USAGE_GRANULARITY = 'daily';
-const TABS = ['dashboard','sea','traces','providers','stickers','persona','perception','ops','alerts'];
-
-const SLOT_LABELS = {
-  main_brain: '主脑对话',
-  gatekeeper: '门卫决策',
-  reflection: '离线反思',
-  embedding: '向量检索',
-  tts: '语音合成',
-  web_search: '联网搜索',
-};
-const ROLE_LABELS = { primary: '主路由', fallback: '备用路由' };
-const PROTO_LABELS = { openai_compatible: 'OpenAI 兼容', typesafe_systemone: 'Jev 原生协议' };
-const HEALTH_LABELS = { healthy: '健康', error: '异常', unknown: '未测活' };
-const STAGE_LABELS = {
-  inbound: '入站接收',
-  gatekeeper: '门卫决策',
-  main_brain: '主脑生成',
-  web_search: '联网搜索',
-  tts: '语音合成',
-  onebot: 'OneBot 投递',
-  reflection: '离线反思',
-};
-const STATUS_LABELS = {
-  ok: '成功',
-  accepted: '已受理',
-  submitted: '已提交',
-  synthesized: '已合成',
-  direct_pass: '直接放行',
-  soft_entry: '主动软切入',
-  silent: '静默旁听',
-  blocked_recall: '撤回拦截',
-  approved: '已启用',
-  pending: '待审核',
-  rejected: '已拒绝',
-  succeeded: '成功',
-  running: '进行中',
-  failed: '失败',
-  rolled_back: '已回滚',
-  success: '成功',
-  error: '失败',
-};
-const SEVERITY_LABELS = { critical: '严重', warning: '警告', info: '通知' };
-const ALERT_TYPE_LABELS = { webhook: 'Webhook 推送', smtp: 'SMTP 邮件', qq_admin: 'QQ 管理员私聊' };
-const STORE_LABELS = { redis: 'Redis 状态库', memory: '内存状态库' };
-const GATEWAY_MODE_LABELS = { reverse_ws: '反向 WS', forward_ws: '正向 WS', webhook: 'HTTP 回调' };
-function labelOf(map, key) { return map[key] || key || '-'; }
-function formatCompactNum(n) {
-  const num = Number(n || 0);
-  if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
-  if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
-  return String(num);
-}
-
-function esc(val) {
-  return String(val ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
-}
-function formatLocalTime(iso, includeYear = false) {
-  if (!iso) return '-';
-  const raw = String(iso).trim();
-  const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
-  const d = new Date(hasTz ? raw : `${raw}Z`);
-  if (Number.isNaN(d.getTime())) return raw.slice(includeYear ? 0 : 5, 19).replace('T', ' ');
-  const pad = n => String(n).padStart(2, '0');
-  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  return includeYear ? `${d.getFullYear()}-${md}` : md;
-}
-function toast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 2600); }
-function toggleDrawer(force) {
-  const sb = document.getElementById('sidebar'), bd = document.getElementById('drawerBackdrop');
-  const open = typeof force === 'boolean' ? force : !sb.classList.contains('open');
-  sb.classList.toggle('open', open); bd.classList.toggle('open', open);
-}
-async function api(path, opts = {}) {
-  const headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
-  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
-  const res = await fetch(path, Object.assign({}, opts, { headers }));
-  if (res.status === 401) { logout(); throw new Error('Unauthorized'); }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || '请求失败');
-  return data;
-}
-
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault(); document.getElementById('loginErr').textContent = '';
-  try {
-    const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: document.getElementById('loginUser').value.trim(), password: document.getElementById('loginPass').value, totp_code: document.getElementById('loginTotp').value.trim() || null }) });
-    TOKEN = data.access_token; localStorage.setItem('companion_token', TOKEN); enterApp(data.username);
-  } catch (err) { document.getElementById('loginErr').textContent = err.message; }
-});
-function logout() { TOKEN = ''; localStorage.removeItem('companion_token'); document.getElementById('appView').classList.add('hidden'); document.getElementById('loginView').classList.remove('hidden'); }
-function enterApp(u) { document.getElementById('loginView').classList.add('hidden'); document.getElementById('appView').classList.remove('hidden'); document.getElementById('userInfo').textContent = '管理员：' + u; switchTab('dashboard'); }
-
-function switchTab(tab) {
-  CURRENT_TAB = tab; toggleDrawer(false);
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  document.querySelectorAll('.mb-btn[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  TABS.forEach(t => document.getElementById('tab-' + t).classList.toggle('hidden', t !== tab));
-  refreshCurrentTab();
-}
-function switchMemoryView(view) {
-  document.querySelectorAll('.seg-btn').forEach(b => b.classList.toggle('active', b.dataset.mview === view));
-  ['graph','identities','ambient'].forEach(v => document.getElementById('mview-' + v).classList.toggle('hidden', v !== view));
-  if (view === 'graph') loadConsciousnessSea(false);
-  if (view === 'identities' || view === 'ambient') loadMemoryTables();
-}
-function loadUnifiedMemory() { loadConsciousnessSea(false); loadMemoryTables(); }
-function refreshCurrentTab() {
-  if (CURRENT_TAB==='dashboard') loadDashboard();
-  if (CURRENT_TAB==='sea') loadUnifiedMemory();
-  if (CURRENT_TAB==='traces') loadTraces();
-  if (CURRENT_TAB==='providers') loadProviders();
-  if (CURRENT_TAB==='stickers') loadStickers();
-  if (CURRENT_TAB==='persona') loadPersona();
-  if (CURRENT_TAB==='perception') loadPerception();
-  if (CURRENT_TAB==='ops') loadOps();
-  if (CURRENT_TAB==='alerts') loadAlerts();
-}
-document.querySelectorAll('.nav-btn').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
-
-/* --- 1. Dashboard (Visual Bars, Zero Raw JSON) --- */
-function switchUsageGranularity(gran) {
-  USAGE_GRANULARITY = gran === 'hourly' ? 'hourly' : 'daily';
-  document.querySelectorAll('[data-ugran]').forEach(b => b.classList.toggle('active', b.dataset.ugran === USAGE_GRANULARITY));
-  renderUsageChart();
-}
-function selectUsageBar(idx) {
-  const items = USAGE_SERIES_CACHE[USAGE_GRANULARITY] || [];
-  const item = items[idx];
-  if (!item) return;
-  document.querySelectorAll('#usageBars .usage-bar-col').forEach((el, i) => el.classList.toggle('active', i === idx));
-  const title = USAGE_GRANULARITY === 'hourly' ? (item.hour || item.label) : (item.date || item.label);
-  const ttsPart = item.tts_chars ? ` · 语音 <strong>${Number(item.tts_chars).toLocaleString()}</strong> 字` : '';
-  document.getElementById('usageChartMeta').innerHTML = `<span><strong>${esc(title)}</strong> · 总消耗 <strong>${Number(item.tokens||0).toLocaleString()}</strong> Token（输入 ${Number(item.prompt_tokens||0).toLocaleString()} / 输出 ${Number(item.completion_tokens||0).toLocaleString()}）· 调用 ${Number(item.calls||0)} 次${ttsPart}</span><span>单位：Token</span>`;
-}
-function renderUsageChart() {
-  const items = USAGE_SERIES_CACHE[USAGE_GRANULARITY] || [];
-  const box = document.getElementById('usageBars');
-  const meta = document.getElementById('usageChartMeta');
-  if (!items.length) {
-    meta.innerHTML = '<span>暂无消耗趋势数据</span><span>单位：Token</span>';
-    box.innerHTML = '<div class="empty-state" style="width:100%;">暂无统计数据</div>';
-    return;
-  }
-  const maxTok = Math.max(1, ...items.map(x => Number(x.tokens || 0)));
-  const totalTok = items.reduce((acc, x) => acc + Number(x.tokens || 0), 0);
-  const totalCalls = items.reduce((acc, x) => acc + Number(x.calls || 0), 0);
-  const totalTts = items.reduce((acc, x) => acc + Number(x.tts_chars || 0), 0);
-  const winLabel = USAGE_GRANULARITY === 'hourly' ? '最近 24 小时' : `近 ${items.length} 天`;
-  const ttsSummary = totalTts ? ` · 语音 <strong>${totalTts.toLocaleString()}</strong> 字` : '';
-  meta.innerHTML = `<span>${winLabel}累计 <strong>${totalTok.toLocaleString()}</strong> Token · 调用 ${totalCalls.toLocaleString()} 次${ttsSummary}（悬停或点击柱条查看明细）</span><span>峰值 ${maxTok.toLocaleString()} Token</span>`;
-  const isHourly = USAGE_GRANULARITY === 'hourly';
-  box.innerHTML = items.map((item, idx) => {
-    const val = Number(item.tokens || 0);
-    const pct = val > 0 ? Math.max(4, Math.round((val / maxTok) * 100)) : 0;
-    const shortLbl = isHourly
-      ? ((idx % 3 === 0 || idx === items.length - 1) ? item.label.slice(0, 2) : '')
-      : (items.length > 14 ? ((idx % 5 === 0 || idx === items.length - 1) ? item.label : '') : item.label);
-    const showVal = isHourly
-      ? (val === maxTok || idx % 3 === 0)
-      : (items.length <= 10 || val === maxTok || idx % 5 === 0 || idx === items.length - 1);
-    const topVal = val > 0 && showVal ? formatCompactNum(val) : '';
-    return `<div class="usage-bar-col${val === 0 ? ' zero' : ''}" onmouseenter="selectUsageBar(${idx})" onclick="selectUsageBar(${idx})" title="${esc(item.hour || item.date)}：${val.toLocaleString()} Token">
-      <div class="usage-bar-val">${esc(topVal)}</div>
-      <div class="usage-bar-track"><div class="usage-bar-fill" style="height:${val > 0 ? pct : 3}%"></div></div>
-      <div class="usage-bar-lbl">${esc(shortLbl)}</div>
-    </div>`;
-  }).join('');
-}
-async function loadDashboard() {
-  const tzOffset = -new Date().getTimezoneOffset();
-  const d = await api(`/api/dashboard/overview?days=7&tz_offset_minutes=${tzOffset}`);
-  USAGE_SERIES_CACHE = d.usage_series || { daily: [], hourly: [] };
-  const cachePct = Math.min(100, Number(d.tokens.prompt_cache_hit_rate_pct || 0));
-  document.getElementById('kpiRow').innerHTML = `
-    <div class="card kpi-card">
-      <div class="kpi-top"><span class="kpi-label">今日 Token 消耗</span><span class="kpi-icon">🔢</span></div>
-      <div class="kpi-val">${Number(d.tokens.today_total_tokens||0).toLocaleString()}</div>
-      <div class="progress-track"><div class="progress-fill" style="width:${cachePct.toFixed(1)}%;background:#4f46e5"></div></div>
-      <div class="kpi-sub">近 ${d.window_days} 天总计 <strong>${Number(d.tokens.total_tokens||0).toLocaleString()}</strong> · 缓存命中 ${cachePct}%</div>
-    </div>
-    <div class="card kpi-card">
-      <div class="kpi-top"><span class="kpi-label">生产响应耗时</span><span class="kpi-icon">⚡</span></div>
-      <div class="kpi-val">${d.tokens.avg_ttft_ms}ms</div>
-      ${d.tokens.latency_excluded_calls ? `<div class="kpi-sub">已排除 ${Number(d.tokens.latency_excluded_calls)} 条历史耗时样本</div>` : ''}
-      <div class="kpi-sub">P95 ${d.tokens.p95_ttft_ms}ms · 缓存 <strong>${d.tokens.prompt_cache_hit_rate_pct}%</strong> ${d.tokens.slow_response_alerts ? `<span class="badge warn">慢响应告警 ${d.tokens.slow_response_alerts}</span>` : ""}</div>
-    </div>
-    <div class="card kpi-card">
-      <div class="kpi-top"><span class="kpi-label">门卫放行率</span><span class="kpi-icon">🛡️</span></div>
-      <div class="kpi-val">${d.gatekeeper.pass_rate_pct}%</div>
-      <div class="kpi-sub">近 7 天累计处理 ${d.gatekeeper.total_messages} 条消息</div>
-    </div>
-    <div class="card kpi-card">
-      <div class="kpi-top"><span class="kpi-label">语音合成字符</span><span class="kpi-icon">🎙️</span></div>
-      <div class="kpi-val">${Number(d.tts.today_chars||0).toLocaleString()} 字</div>
-      <div class="kpi-sub">近 ${d.window_days} 天 <strong>${Number(d.tts.total_chars||0).toLocaleString()} 字</strong> · 合成 ${d.tts.synthesized_count} 次 (成功率 ${d.tts.success_rate_pct}% / 受理 ${d.tts.onebot_accept_rate_pct ?? '-'}%)</div>
-    </div>
-  `;
-  const gw = d.health.gateway;
-  document.getElementById('healthBox').innerHTML = `
-    <div class="pill-list" style="margin-bottom:12px;">
-      <span class="badge ${gw.connected?'ok':'warn'}">● ${esc(gw.gateway)}（${esc(labelOf(GATEWAY_MODE_LABELS, gw.mode))} · ${gw.connected ? '已连接' : '未连接'}）</span>
-      <span class="badge info">状态库：${esc(labelOf(STORE_LABELS, d.health.state_store))}</span>
-      <span class="badge purple">插件：${d.health.plugins.length} 个</span>
-    </div>
-    <div style="font-size:13px;color:var(--ink2);">已绑定 QQ 熟人卡 <strong>${d.counts.qq_identities}</strong> 位 · 已启用表情包 <strong>${d.counts.stickers_approved}</strong> 张 · 出站投递 <strong>${d.counts.outbox_sent}</strong> 条</div>
-  `;
-  const gk = d.gatekeeper.breakdown || {};
-  const tot = Math.max(1, d.gatekeeper.total_messages);
-  const gkItems = [
-    ['direct_pass', '直接放行（@ / 引用 / 直呼小名）', '#4f46e5'],
-    ['soft_entry', '降权软切入（主动接梗）', '#10b981'],
-    ['silent', '静默旁听（沉淀边缘记忆）', '#64748b'],
-    ['blocked_recall', '撤回即时拦截', '#ef4444']
-  ];
-  document.getElementById('gatekeeperBox').innerHTML = gkItems.map(([k, label, col]) => {
-    const cnt = Number(gk[k] || 0), pct = ((cnt / tot) * 100).toFixed(1);
-    return `<div class="bar-row"><div class="bar-meta"><span>${label}</span><span><strong>${cnt}</strong> (${pct}%)</span></div><div class="progress-track"><div class="progress-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
-  }).join('');
-  renderUsageChart();
-  document.getElementById('slotTable').innerHTML = d.by_slot.length ? d.by_slot.map(s=> s.unit==='chars' ? `<tr><td><span class="badge purple">${esc(labelOf(SLOT_LABELS, s.slot))}</span></td><td>${s.calls}</td><td>-</td><td>-</td><td><strong>${Number(s.chars||0).toLocaleString()} 字符</strong></td></tr>` : `<tr><td><span class="badge info">${esc(labelOf(SLOT_LABELS, s.slot))}</span></td><td>${s.calls}</td><td>${Number(s.prompt_tokens||0).toLocaleString()}</td><td>${Number(s.completion_tokens||0).toLocaleString()}</td><td><strong>${Number(s.tokens||0).toLocaleString()} Token</strong></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">暂无生产调用数据</td></tr>';
-}
-
-/* --- 2. Unified Memory & Consciousness Sea (Structured Inspector, Zero Raw JSON) --- */
-async function loadMemoryTables() {
-  const [ids, amb, slangs] = await Promise.all([api('/api/memory/identities'), api('/api/memory/ambient'), api('/api/memory/expressions')]);
-  document.getElementById('identityTable').innerHTML = ids.length ? ids.map(i=>`<tr>
-    <td><code>${esc(i.qq_id)}</code></td><td><strong>${esc(i.nickname||'-')}</strong></td>
-    <td><div class="pill-list">${(i.known_names||[]).map(n=>`<span class="badge info">${esc(n)}</span>`).join('')||'-'}</div></td>
-    <td>${Number(i.relationship_level)}</td>
-    <td><button class="btn sm danger" onclick="forgetUser(${Number(i.qq_id)})">一键忘却</button></td>
-  </tr>`).join('') : '<tr><td colspan="5" class="empty-state">暂无 QQ 身份记录</td></tr>';
-  document.getElementById('ambientBox').innerHTML = amb.length ? amb.map(a=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);"><div style="display:flex;justify-content:space-between;margin-bottom:4px;"><strong>群 ${esc(a.group_id)}</strong><span class="badge info">${Number(a.message_count)} 条沉淀</span></div><div style="font-size:13px;color:var(--ink2)">${esc(a.summary_text)}</div></div>`).join('') : '<div class="empty-state">暂无边缘旁听摘要</div>';
-  document.getElementById('slangBox').innerHTML = slangs.length ? slangs.map(s=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;gap:8px;align-items:center;"><div><strong>${esc(s.phrase)}</strong> <span class="badge ${s.status==='approved'?'ok':'warn'}">${esc(labelOf(STATUS_LABELS, s.status))}</span><div style="font-size:12px;color:var(--mute)">${esc(s.meaning)}</div></div>${s.status==='pending'?`<button class="btn sm secondary" onclick="approveSlang(${Number(s.id)})">通过</button>`:''}</div>`).join('') : '<div class="empty-state">暂无群黑话</div>';
-}
-async function approveSlang(id) { await api(`/api/memory/expressions/${id}`, { method: 'PATCH', body: JSON.stringify({ status: 'approved' }) }); toast('已通过黑话'); loadMemoryTables(); }
-async function forgetUser(qq) { if (!confirm(`确认连根清理 QQ ${qq} 的所有记忆与画像？`)) return; const r = await api('/api/memory/forget', { method: 'POST', body: JSON.stringify({ qq_id: qq, wipe_profile: true }) }); toast(`已清理消息 ${r.messages_deleted} 条`); loadUnifiedMemory(); }
-
-const LAYER_COLORS = { L5_self:'#facc15', group:'#38bdf8', L4_identity:'#34d399', L2_ambient:'#22d3ee', L3_public_episode:'#818cf8', L3_private_episode:'#f43f5e', L4_slang:'#fb923c' };
-const LAYER_NAMES = { L5_self:'L5 自我核心', group:'群聊记忆域', L4_identity:'L4 熟人卡', L2_ambient:'L2 边缘旁听', L3_public_episode:'L3 群情景/纪念', L3_private_episode:'L3 私聊半隔离', L4_slang:'L4 群黑话' };
-let SEA = { nodes:[], edges:[], visibleLayers:new Set(Object.keys(LAYER_COLORS)), camX:0, camY:0, zoom:1, selected:null, dragNode:null, panning:false, lastX:0, lastY:0, raf:null, tick:0 };
-
-function makeDemoSea() {
-  return {
-    nodes: [
-      { id:'self_core', label:'EchoSea · 意识核心', layer:'L5_self', size:28, summary:'精力 88 · 心情 excited · 晚间吹水看群', detail:{ energy_level:88, mood:'excited', current_activity:'晚间吹水看群' } },
-      { id:'group_101', label:'群 101 · 摸鱼主群', layer:'group', size:21, summary:'活跃群聊记忆域', detail:{ group_id:101 } },
-      { id:'qq_1', label:'阿明', layer:'L4_identity', size:18, summary:'QQ 10086 · 亲密度 82', detail:{ qq_id:10086, known_names:['阿明','摸鱼明'], relationship_level:82, public_profile:{ interests:['原神','烧烤'] }, has_private_isolation:true } },
-      { id:'qq_2', label:'红姐', layer:'L4_identity', size:16, summary:'QQ 20001 · 亲密度 65', detail:{ qq_id:20001, known_names:['小红','红姐'], relationship_level:65, public_profile:{ interests:['露营','吸猫'] } } },
-      { id:'amb_1', label:'边缘旁听 #12', layer:'L2_ambient', size:13, summary:'刚才大家在争晚饭吃麻辣烫还是烧烤', detail:{ message_count:24, summary_text:'近2小时群内热议晚饭选麻辣烫还是烧烤。' } },
-      { id:'ep_1', label:'五排连胜之夜', layer:'L3_public_episode', size:16, summary:'群内共同经历 · 纪念日', detail:{ scope:'public_group', is_anniversary:true, content:'昨晚和群友五排连胜五把。' } },
-      { id:'ep_2', label:'私聊吐露换工作', layer:'L3_private_episode', size:15, summary:'仅私聊可见 · SQL 级严格半隔离', detail:{ scope:'private_dm', content:'私聊时聊到想换工作，群聊绝不提及。' } },
-      { id:'slang_1', label:'梗·寄了', layer:'L4_slang', size:11, summary:'事情办砸了 (approved)', detail:{ phrase:'寄了', meaning:'事情办砸了', status:'approved', usage_count:19 } }
-    ],
-    edges: [
-      { source:'self_core', target:'group_101', relation:'常驻群域' }, { source:'self_core', target:'qq_1', relation:'熟人羁绊' }, { source:'self_core', target:'qq_2', relation:'熟人羁绊' },
-      { source:'qq_1', target:'group_101', relation:'群名片:摸鱼明' }, { source:'qq_2', target:'group_101', relation:'群名片:红姐' }, { source:'group_101', target:'amb_1', relation:'旁听沉淀' },
-      { source:'qq_1', target:'amb_1', relation:'参与讨论' }, { source:'qq_2', target:'amb_1', relation:'参与讨论' }, { source:'group_101', target:'ep_1', relation:'群内情景' },
-      { source:'qq_1', target:'ep_1', relation:'共同经历' }, { source:'qq_1', target:'ep_2', relation:'私密记忆(半隔离)' }, { source:'group_101', target:'slang_1', relation:'群黑话' }
-    ]
-  };
-}
-
-async function loadConsciousnessSea(forceDemo = false) {
-  let data = forceDemo ? makeDemoSea() : await api('/api/memory/graph');
-  if (!forceDemo && (!data.nodes || data.nodes.length <= 1)) {
-    data = makeDemoSea();
-    document.getElementById('seaStats').textContent = '当前库内记忆较少，已展示演示星图 · 有真实对话后自动切换';
-  } else {
-    document.getElementById('seaStats').textContent = `节点 ${data.nodes.length} · 关联 ${data.edges.length} · 点击任意星点探索`;
-  }
-  const n = data.nodes.length;
-  SEA.nodes = data.nodes.map((node, i) => {
-    const angle = (i / Math.max(1, n)) * Math.PI * 2;
-    const radius = node.id === 'self_core' ? 0 : (node.layer === 'group' ? 115 : 190 + (i % 3) * 42);
-    return Object.assign({}, node, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, vx: 0, vy: 0 });
-  });
-  const byId = Object.fromEntries(SEA.nodes.map(x => [x.id, x]));
-  SEA.edges = data.edges.map(e => ({ source: byId[e.source], target: byId[e.target], relation: e.relation })).filter(e => e.source && e.target);
-  SEA.selected = SEA.nodes[0] || null;
-  if (SEA.selected) renderInspector(SEA.selected);
-  seaResetView(); startSeaLoop();
-}
-function seaZoom(factor) { SEA.zoom = Math.max(0.4, Math.min(2.6, SEA.zoom * factor)); }
-function seaResetView() { SEA.camX = 0; SEA.camY = 0; SEA.zoom = window.innerWidth < 768 ? 0.78 : 1.0; }
-document.querySelectorAll('#seaFilters .chip').forEach(btn => btn.addEventListener('click', () => {
-  const l = btn.dataset.layer;
-  if (SEA.visibleLayers.has(l)) { SEA.visibleLayers.delete(l); btn.classList.remove('on'); } else { SEA.visibleLayers.add(l); btn.classList.add('on'); }
-}));
-
-function renderInspector(node) {
-  const d = node.detail || {};
-  const rels = SEA.edges.filter(e => e.source.id === node.id || e.target.id === node.id)
-    .map(e => `<div class="sea-kv"><span>${e.source.id === node.id ? '→ ' + esc(e.target.label) : '← ' + esc(e.source.label)}</span><span style="color:#818cf8">${esc(e.relation)}</span></div>`).join('');
-  let extraHtml = '';
-  if (node.layer === 'L4_identity') {
-    const names = (d.known_names || []).map(x => `<span class="badge info">${esc(x)}</span>`).join('');
-    const interests = ((d.public_profile || {}).interests || []).map(x => `<span class="badge ok">${esc(x)}</span>`).join('');
-    extraHtml = `
-      <div style="margin:10px 0;">
-        <div style="color:#94a3b8;font-size:11px;margin-bottom:4px;">历史名片</div>
-        <div class="pill-list">${names || '<span style="color:#64748b">无</span>'}</div>
-      </div>
-      ${interests ? `<div style="margin:8px 0;"><div style="color:#94a3b8;font-size:11px;margin-bottom:4px;">公开兴趣画像</div><div class="pill-list">${interests}</div></div>` : ''}
-      ${d.has_private_isolation ? '<div style="margin:8px 0;"><span class="badge err">🔒 含私聊半隔离档案（群聊不可见）</span></div>' : ''}
-      ${d.qq_id ? `<div style="margin:10px 0;"><button class="btn sm danger" style="width:100%;" onclick="forgetUser(${Number(d.qq_id)})">一键忘却该 QQ 记忆</button></div>` : ''}
-    `;
-  } else if (d.content || d.summary_text) {
-    extraHtml = `<div style="background:rgba(255,255,255,.06);padding:10px;border-radius:9px;margin:10px 0;color:#e2e8f0;line-height:1.5;">${esc(d.content || d.summary_text)}</div>`;
-  }
-  document.getElementById('seaInspector').innerHTML = `
-    <div style="margin-bottom:6px;"><span class="badge info">${esc(LAYER_NAMES[node.layer] || node.layer)}</span></div>
-    <h4>${esc(node.label)}</h4>
-    <p style="color:#cbd5e1;margin:0 0 8px;">${esc(node.summary || '')}</p>
-    ${extraHtml}
-    <div style="font-size:11.5px;color:#94a3b8;margin:10px 0 4px;font-weight:600;">关联脉络</div>
-    <div>${rels || '<div style="color:#64748b">暂无关联</div>'}</div>
-  `;
-}
-
-function startSeaLoop() {
-  if (SEA.raf) cancelAnimationFrame(SEA.raf);
-  const canvas = document.getElementById('seaCanvas'), ctx = canvas.getContext('2d');
-  const stars = Array.from({ length: 75 }, (_, i) => ({ x: (i * 137.5) % 1000 / 1000, y: (i * 293.3) % 1000 / 1000, r: 0.5 + (i % 3) * 0.55 }));
-  function step() {
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      const dpr = window.devicePixelRatio || 1;
-      if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) { canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr); }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const W = rect.width, H = rect.height; ctx.clearRect(0, 0, W, H); SEA.tick += 0.014;
-      for (const s of stars) { ctx.fillStyle = `rgba(199,210,254,${0.14 + 0.16 * Math.sin(SEA.tick + s.x * 11)})`; ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2); ctx.fill(); }
-      const vis = SEA.nodes.filter(n => SEA.visibleLayers.has(n.layer));
-      for (let i = 0; i < vis.length; i++) {
-        const a = vis[i]; if (a === SEA.dragNode || a.id === 'self_core') continue;
-        a.vx += -a.x * 0.0008; a.vy += -a.y * 0.0008;
-        for (let j = i + 1; j < vis.length; j++) {
-          const b = vis[j], dx = a.x - b.x, dy = a.y - b.y, dist = Math.hypot(dx, dy) || 1;
-          if (dist < 135) { const f = (135 - dist) * 0.0035, fx = (dx/dist)*f, fy = (dy/dist)*f; a.vx += fx; a.vy += fy; if (b !== SEA.dragNode && b.id !== 'self_core') { b.vx -= fx; b.vy -= fy; } }
-        }
-      }
-      for (const e of SEA.edges) {
-        if (!SEA.visibleLayers.has(e.source.layer) || !SEA.visibleLayers.has(e.target.layer)) continue;
-        const dx = e.target.x - e.source.x, dy = e.target.y - e.source.y, dist = Math.hypot(dx, dy) || 1, f = (dist - 120) * 0.0022, fx = (dx/dist)*f, fy = (dy/dist)*f;
-        if (e.source !== SEA.dragNode && e.source.id !== 'self_core') { e.source.vx += fx; e.source.vy += fy; }
-        if (e.target !== SEA.dragNode && e.target.id !== 'self_core') { e.target.vx -= fx; e.target.vy -= fy; }
-      }
-      for (const n of vis) { if (n === SEA.dragNode || n.id === 'self_core') continue; n.vx *= 0.86; n.vy *= 0.86; n.x += n.vx; n.y += n.vy; }
-      ctx.save(); ctx.translate(W/2 + SEA.camX, H/2 + SEA.camY); ctx.scale(SEA.zoom, SEA.zoom);
-      for (const e of SEA.edges) {
-        if (!SEA.visibleLayers.has(e.source.layer) || !SEA.visibleLayers.has(e.target.layer)) continue;
-        const isPrivate = (e.relation || '').includes('私密'), hi = SEA.selected && (SEA.selected.id === e.source.id || SEA.selected.id === e.target.id);
-        ctx.strokeStyle = isPrivate ? 'rgba(244,63,94,0.6)' : (hi ? 'rgba(129,140,248,0.82)' : 'rgba(148,163,184,0.24)');
-        ctx.lineWidth = hi ? 1.9 : 1.1; ctx.setLineDash(isPrivate ? [4,4] : []);
-        ctx.beginPath(); ctx.moveTo(e.source.x, e.source.y); ctx.lineTo(e.target.x, e.target.y); ctx.stroke(); ctx.setLineDash([]);
-        const t = (SEA.tick * 0.35 + (e.source.x + e.target.y) * 0.002) % 1, tt = t < 0 ? t + 1 : t;
-        ctx.fillStyle = isPrivate ? '#fb7185' : '#a5b4fc';
-        ctx.beginPath(); ctx.arc(e.source.x + (e.target.x - e.source.x)*tt, e.source.y + (e.target.y - e.source.y)*tt, 2.1, 0, Math.PI*2); ctx.fill();
-      }
-      for (const n of vis) {
-        const col = LAYER_COLORS[n.layer] || '#60a5fa', sel = SEA.selected && SEA.selected.id === n.id;
-        const grad = ctx.createRadialGradient(n.x, n.y, 1, n.x, n.y, n.size * 2.1);
-        grad.addColorStop(0, col); grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 2.1, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 0.56, 0, Math.PI * 2); ctx.fill();
-        if (sel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.arc(n.x, n.y, n.size * 0.82, 0, Math.PI * 2); ctx.stroke(); }
-        ctx.fillStyle = '#f8fafc'; ctx.font = (n.id==='self_core'?'700 12.5px':'500 11.5px')+' -apple-system, sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText(n.label, n.x, n.y + n.size * 0.56 + 15);
-      }
-      ctx.restore();
-    }
-    SEA.raf = requestAnimationFrame(step);
-  }
-  step();
-}
-(function bindSeaPointer() {
-  const canvas = document.getElementById('seaCanvas');
-  function toWorld(cx, cy) { const r = canvas.getBoundingClientRect(); return { x:(cx - r.left - r.width/2 - SEA.camX)/SEA.zoom, y:(cy - r.top - r.height/2 - SEA.camY)/SEA.zoom }; }
-  function hitTest(wx, wy) { return SEA.nodes.find(n => SEA.visibleLayers.has(n.layer) && Math.hypot(n.x - wx, n.y - wy) <= Math.max(18, n.size * 0.9)); }
-  canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); const w = toWorld(e.clientX, e.clientY), hit = hitTest(w.x, w.y); SEA.lastX = e.clientX; SEA.lastY = e.clientY; if (hit) { SEA.dragNode = hit; SEA.selected = hit; renderInspector(hit); } else { SEA.panning = true; } });
-  canvas.addEventListener('pointermove', (e) => { if (SEA.dragNode) { const w = toWorld(e.clientX, e.clientY); SEA.dragNode.x = w.x; SEA.dragNode.y = w.y; SEA.dragNode.vx = 0; SEA.dragNode.vy = 0; } else if (SEA.panning) { SEA.camX += e.clientX - SEA.lastX; SEA.camY += e.clientY - SEA.lastY; SEA.lastX = e.clientX; SEA.lastY = e.clientY; } });
-  canvas.addEventListener('pointerup', () => { SEA.dragNode = null; SEA.panning = false; });
-  canvas.addEventListener('wheel', (e) => { e.preventDefault(); seaZoom(e.deltaY < 0 ? 1.1 : 0.91); }, { passive: false });
-})();
-
-/* --- 3. Traces --- */
-async function loadTraces() {
-  const rows = await api('/api/dashboard/traces?limit=80');
-  document.getElementById('traceTable').innerHTML = rows.length ? rows.map(r=>`<tr>
-    <td><code>${esc(r.request_id)}</code></td><td>${esc(r.scene)}${r.group_id ? ' / '+esc(r.group_id) : ''}</td>
-    <td><span class="badge info">${esc(labelOf(STAGE_LABELS, r.stage))}</span></td>
-    <td><span class="badge ${['ok','accepted','submitted','synthesized','direct_pass','soft_entry'].includes(r.status)?'ok':(r.status==='silent'?'warn':'err')}">${esc(labelOf(STATUS_LABELS, r.status))}</span></td>
-    <td>${Number(r.latency_ms)}ms</td><td>${esc(r.error_type || '-')}</td><td>${esc(formatLocalTime(r.created_at))}</td>
-  </tr>`).join('') : '<tr><td colspan="7" class="empty-state">暂无追踪记录</td></tr>';
-}
-
-/* --- 4. Providers Card Grid + Modal Editor --- */
-async function loadProviders() {
-  const data = await api('/api/providers');
-  PROVIDERS_CACHE = data.items || [];
-  document.getElementById('providerGrid').innerHTML = PROVIDERS_CACHE.length ? PROVIDERS_CACHE.map(p=>`
-    <div class="provider-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
-        <span class="badge info">${esc(labelOf(SLOT_LABELS, p.slot))} · ${esc(labelOf(ROLE_LABELS, p.role))}</span>
-        <span class="badge ${p.cooldown_active?'warn':(p.last_health_status==='healthy'?'ok':(p.last_health_status==='error'?'err':'warn'))}">● ${p.cooldown_active ? ('冷却中 '+Math.max(1,Math.ceil(Number(p.cooldown_remaining_seconds||0)/60))+'m') : esc(labelOf(HEALTH_LABELS, p.last_health_status))} ${(!p.cooldown_active && p.last_health_ms) ? Number(p.last_health_ms)+'ms' : ''}</span>
-      </div>
-      <div>
-        <div style="font-weight:700;font-size:15px;">${esc(p.name)}</div>
-        <div style="font-size:12.5px;color:var(--mute);margin-top:2px;">${esc(p.model_name)}</div>
-      </div>
-      <div style="font-size:12px;color:var(--ink2);word-break:break-all;">${esc(p.base_url)}</div>
-      <div class="pill-list">
-        <span class="badge purple">${esc(labelOf(PROTO_LABELS, p.protocol))}</span>
-        <code>${esc(p.api_key_masked||'(空)')}</code>
-      </div>
-      ${p.cooldown_active ? `<div style="font-size:11.5px;color:var(--warn-ink);background:var(--warn-bg);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:6px 8px;">已切备路：${esc(p.cooldown_reason||'冷却保护中')}，到期自动试探回切</div>` : ''}
-      <div class="row-actions" style="margin-top:auto;padding-top:8px;border-top:1px solid var(--border-soft);">
-        <button class="btn sm secondary" onclick="editProvider(${Number(p.id)})">编辑</button>
-        <button class="btn sm secondary" onclick="testProvider(${Number(p.id)})">测活</button>
-        ${p.cooldown_active ? `<button class="btn sm" onclick="resetProviderCooldown(${Number(p.id)})">恢复主路</button>` : ''}
-        <button class="btn sm danger" onclick="delProvider(${Number(p.id)})">删除</button>
-      </div>
-    </div>
-  `).join('') : '<div class="card empty-state" style="grid-column:1/-1;">尚未配置任何模型槽位，点击右上角「＋ 新增 / 配置槽位」开始</div>';
-}
-function openProviderModal() { resetProviderForm(); document.getElementById('providerModal').classList.remove('hidden'); }
-function closeProviderModal() { document.getElementById('providerModal').classList.add('hidden'); }
-function editProvider(id) {
-  const p = PROVIDERS_CACHE.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById('pEditId').value = String(p.id);
-  document.getElementById('pSlot').value = p.slot;
-  document.getElementById('pProto').value = p.protocol;
-  document.getElementById('pRole').value = p.role;
-  document.getElementById('pName').value = p.name;
-  document.getElementById('pUrl').value = p.base_url;
-  document.getElementById('pModel').value = p.model_name;
-  document.getElementById('pKey').value = '';
-  document.getElementById('pExtra').value = p.extra_config && Object.keys(p.extra_config).length ? JSON.stringify(p.extra_config, null, 2) : '';
-  document.getElementById('providerFormTitle').textContent = `编辑模型路由：${p.name}`;
-  document.getElementById('providerModal').classList.remove('hidden');
-}
-function resetProviderForm() {
-  document.getElementById('pEditId').value = '';
-  document.getElementById('providerForm').reset();
-  document.getElementById('providerFormTitle').textContent = '新增 / 配置模型槽位';
-}
-document.getElementById('providerForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const editId = document.getElementById('pEditId').value.trim();
-  const extraRaw = document.getElementById('pExtra').value.trim();
-  let extraObj = null;
-  if (extraRaw) { try { extraObj = JSON.parse(extraRaw); } catch { toast('扩展配置 JSON 格式有误'); return; } }
-  const body = {
-    slot: document.getElementById('pSlot').value, protocol: document.getElementById('pProto').value, role: document.getElementById('pRole').value,
-    name: document.getElementById('pName').value.trim(), base_url: document.getElementById('pUrl').value.trim(),
-    model_name: document.getElementById('pModel').value.trim(),
-  };
-  const keyVal = document.getElementById('pKey').value.trim();
-  if (keyVal) body.api_key = keyVal;
-  if (extraObj !== null) body.extra_config = extraObj;
-  if (editId) { await api(`/api/providers/${editId}`, { method: 'PATCH', body: JSON.stringify(body) }); toast('已安全更新模型配置'); }
-  else { body.api_key = keyVal; await api('/api/providers', { method: 'PUT', body: JSON.stringify(body) }); toast('模型路由已保存并热生效'); }
-  closeProviderModal(); loadProviders();
-});
-async function resetProviderCooldown(id) {
-  await api(`/api/providers/${id}/reset-cooldown`, {method:'POST'});
-  toast('已解除冷却，下一次请求将优先使用该路由');
-  await loadProviders();
-}
-async function testProvider(id) { const r = await api(`/api/providers/${id}/test`, { method: 'POST' }); toast(r.ok ? `测活成功 (${r.latency_ms}ms)` : `测活失败: ${r.error}`); loadProviders(); }
-async function delProvider(id) { if (!confirm('确认删除该模型路由？')) return; await api(`/api/providers/${id}`, { method: 'DELETE' }); toast('已删除'); loadProviders(); }
-
-/* --- 5. Sticker Visual Card Gallery with AI Auto-Tag --- */
-async function loadStickers() {
-  const [list, presets] = await Promise.all([api('/api/stickers'), api('/api/stickers/presets')]);
-  document.getElementById('stickerPresetGrid').innerHTML = presets.map(p=>`
-    <div style="border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--surface-2);display:flex;flex-direction:column;gap:6px;">
-      <div style="font-weight:700;font-size:13.5px;">${esc(p.name)}</div>
-      <div style="font-size:12px;color:var(--ink2);flex:1;">${esc(p.description)}</div>
-      <div style="font-size:11.5px;color:var(--mute);">${esc(p.format_hint || '')}</div>
-      <div style="margin-top:4px;">
-        <a href="${esc(p.repo_url)}" target="_blank" rel="noopener" class="btn sm secondary" style="text-decoration:none;display:inline-block;">前往仓库下载 ↗</a>
-      </div>
-    </div>
-  `).join('');
-  document.getElementById('stickerGrid').innerHTML = list.length ? list.map(s=>`
-    <div class="sticker-card">
-      <div class="sticker-thumb">
-        ${s.source_url ? `<img src="${esc(s.source_url)}" alt="sticker" onerror="this.style.display='none';this.parentNode.innerHTML='<span style=font-size:32px>🎭</span>'" />` : '<span style="font-size:32px;">🎭</span>'}
-      </div>
-      <div class="sticker-body">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="badge ${s.status==='approved'?'ok':(s.status==='rejected'?'err':'warn')}">${esc(labelOf(STATUS_LABELS, s.status))}</span>
-          <span style="font-size:11.5px;color:var(--mute);">出现 ${Number(s.appearance_count)} · 反应 ${Number(s.positive_reactions)}</span>
-        </div>
-        <div class="pill-list">${(s.emotion_tags||[]).map(t=>`<span class="badge info">${esc(t)}</span>`).join('')||'<span class="badge warn">未打标</span>'}</div>
-        <div class="sticker-hint">${esc(s.context_hint || '暂无语境理解，可点击下方「AI 理解打标」自动生成')}</div>
-        <div class="row-actions" style="margin-top:auto;">
-          <button class="btn sm secondary" onclick="autoTagSticker(${Number(s.id)})">✨ AI 理解打标</button>
-          ${s.status!=='approved'?`<button class="btn sm" onclick="reviewSticker(${Number(s.id)},'approved')">通过</button>`:''}
-          <button class="btn sm danger" onclick="delSticker(${Number(s.id)})">删除</button>
-        </div>
-      </div>
-    </div>
-  `).join('') : '<div class="card empty-state" style="grid-column:1/-1;">图库还是空的，群里斗图或点右上角「＋ 批量导入」后即可在这里看到</div>';
-}
-async function autoTagSticker(id) {
-  toast('正在结合群聊语境理解打标...');
-  const r = await api(`/api/stickers/${id}/auto-tag`, { method: 'POST', body: '{}' });
-  toast(`已打标：${(r.emotion_tags||[]).join(' / ')}`);
-  loadStickers();
-}
-async function importStickers() {
-  const lines = document.getElementById('stickerImportInput').value.trim().split('\n').filter(Boolean);
-  const items = lines.map(l => { const [url, tags, hint] = l.split('|'); return { source_url:(url||'').trim(), emotion_tags:(tags||'fun').split(',').map(x=>x.trim()).filter(Boolean), context_hint:(hint||'').trim() }; });
-  const r = await api('/api/stickers/import', { method: 'POST', body: JSON.stringify({ items }) });
-  toast(`已导入 ${r.imported_count} 张表情包`); document.getElementById('importBox').classList.add('hidden'); loadStickers();
-}
-async function reviewSticker(id, status) { await api(`/api/stickers/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); loadStickers(); }
-async function delSticker(id) { await api(`/api/stickers/${id}`, { method: 'DELETE' }); loadStickers(); }
-async function uploadStickerFile() {
-  const input = document.getElementById('stickerFileInput');
-  const file = input.files && input.files[0];
-  if (!file) { toast('请先选择本地 JSON 或 JSONL 文件'); return; }
-  const limit = parseInt(document.getElementById('presetLimit').value || '80', 10);
-  toast('正在解析并导入本地表情包文件...');
-  const content = await file.text();
-  const r = await api('/api/stickers/presets/upload', { method: 'POST', body: JSON.stringify({ filename: file.name, content, limit }) });
-  toast(`导入完成：新增 ${r.imported_count} 张，跳过重复 ${r.skipped_duplicates} 张`);
-  input.value = '';
-  loadStickers();
-}
-
-/* --- 6. Persona & Visual Sandbox --- */
-async function loadPersona() {
-  const [list, cfgs] = await Promise.all([api('/api/persona/versions'), api('/api/persona/configs')]);
-  document.getElementById('personaList').innerHTML = list.map(p=>`<div style="padding:12px 0;border-bottom:1px solid var(--border-soft);"><div style="display:flex;justify-content:space-between;align-items:center;"><strong>${esc(p.version_tag)} · ${esc(p.bot_name)}</strong>${p.is_active?'<span class="badge ok">生效中</span>':`<button class="btn sm secondary" onclick="activatePersona(${Number(p.id)})">激活</button>`}</div><div class="pill-list" style="margin:6px 0;">${(p.aliases||[]).map(a=>`<span class="badge info">${esc(a)}</span>`).join('')}</div><div style="font-size:13px;color:var(--ink2)">${esc(p.system_prompt)}</div></div>`).join('');
-  document.getElementById('cfgSavedList').textContent = cfgs.length ? ('已保存配置：' + cfgs.map(c=>`${c.scope_type}:${c.scope_id}`).join(' / ')) : '当前使用默认参数';
-}
-async function activatePersona(id) { await api(`/api/persona/versions/${id}/activate`, { method: 'POST' }); toast('已切换生效人设'); loadPersona(); }
-document.getElementById('newPersonaForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  await api('/api/persona/versions', { method: 'POST', body: JSON.stringify({
-    version_tag: document.getElementById('npTag').value.trim(),
-    bot_name: document.getElementById('npName').value.trim(),
-    aliases: document.getElementById('npAliases').value.split(',').map(x=>x.trim()).filter(Boolean),
-    system_prompt: document.getElementById('npPrompt').value.trim(),
-    banned_phrases: document.getElementById('npBanned').value.split(',').map(x=>x.trim()).filter(Boolean),
-    activate: true
-  }) });
-  toast('新人设已创建并激活'); document.getElementById('newPersonaForm').reset(); document.getElementById('newPersonaForm').classList.add('hidden'); loadPersona();
-});
-async function saveRuntimeConfig() {
-  await api('/api/persona/configs', { method: 'PUT', body: JSON.stringify({
-    scope_type: document.getElementById('cfgScopeType').value,
-    scope_id: document.getElementById('cfgScopeId').value.trim() || 'default',
-    config: { soft_entry_threshold: parseFloat(document.getElementById('cfgSoftThr').value || '0.78') }
-  }) });
-  toast('运行参数已热生效'); loadPersona();
-}
-async function runSandbox() {
-  const lines = document.getElementById('simInput').value.trim().split('\n').filter(Boolean);
-  const messages = lines.map(l => { const [qq, ...rest] = l.split('|'); return { sender_qq: parseInt(qq,10)||10001, text: rest.join('|') }; });
-  const res = await api('/api/persona/sandbox/replay', { method: 'POST', body: JSON.stringify({ messages, override_soft_entry_threshold: parseFloat(document.getElementById('simThreshold').value||'0.78') }) });
-  document.getElementById('simResult').innerHTML = (res.results||[]).map(r=>`
-    <div style="padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;background:var(--surface-2);">
-      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-        <strong>${esc(r.sender)}: ${esc(r.text)}</strong>
-        <span class="badge ${r.decision.action==='direct_pass'?'ok':(r.decision.action==='soft_entry'?'info':'warn')}">${esc(labelOf(STATUS_LABELS, r.decision.action))} (${r.decision.score})</span>
-      </div>
-      <div style="font-size:12px;color:var(--mute);margin-top:4px;">${esc(r.decision.reason)}</div>
-    </div>
-  `).join('');
-}
-
-/* --- 7. Perception, 8. Ops & Online Update, 9. Alerts --- */
-async function loadPerception() {
-  const [b, sched, sources, presets] = await Promise.all([
-    api('/api/ops/briefings/latest'), api('/api/ops/schedule'), api('/api/ops/hot-sources'), api('/api/ops/hot-sources/presets')
-  ]);
-  document.getElementById('briefingBox').textContent = b.digest_text || '暂无今日刷网简报';
-  document.getElementById('scheduleTable').innerHTML = sched.map(s=>`<tr><td><code>${Number(s.start_hour)}:00 - ${Number(s.end_hour)}:00</code></td><td>${esc(s.activity)}</td><td><span class="badge info">${esc(s.default_mood)}</span></td><td>${Number(s.energy_target)}</td></tr>`).join('');
-  document.getElementById('hotPresetPills').innerHTML = presets.map(p=>`<button type="button" class="btn sm secondary" onclick="fillHotPreset('${esc(p.name)}','${esc(p.category)}','${esc(p.feed_url)}')">＋ ${esc(p.name)}</button>`).join('');
-  document.getElementById('hotSourceTable').innerHTML = sources.length ? sources.map(s=>`<tr><td><strong>${esc(s.name)}</strong></td><td><span class="badge info">${esc(s.category)}</span></td><td style="font-size:12px;word-break:break-all;">${esc(s.feed_url)}</td><td><span class="badge ${s.is_enabled?'ok':'warn'}">${s.is_enabled?'启用':'停用'}</span></td><td class="row-actions"><button class="btn sm secondary" onclick="toggleHotSource(${Number(s.id)},${!s.is_enabled})">${s.is_enabled?'停用':'启用'}</button><button class="btn sm danger" onclick="delHotSource(${Number(s.id)})">删除</button></td></tr>`).join('') : '<tr><td colspan="5" class="empty-state">尚未配置热点渠道，点击上方预设或填写 RSS 地址添加</td></tr>';
-}
-function fillHotPreset(name, cat, url) { document.getElementById('hsName').value=name; document.getElementById('hsCat').value=cat; document.getElementById('hsUrl').value=url; }
-document.getElementById('hotSourceForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  await api('/api/ops/hot-sources', { method: 'POST', body: JSON.stringify({ name: document.getElementById('hsName').value.trim(), category: document.getElementById('hsCat').value.trim()||'general', feed_url: document.getElementById('hsUrl').value.trim(), is_enabled: true }) });
-  toast('热点渠道已添加'); document.getElementById('hotSourceForm').reset(); loadPerception();
-});
-async function toggleHotSource(id, en) { await api(`/api/ops/hot-sources/${id}`, { method: 'PATCH', body: JSON.stringify({ is_enabled: en }) }); loadPerception(); }
-async function delHotSource(id) { await api(`/api/ops/hot-sources/${id}`, { method: 'DELETE' }); loadPerception(); }
-async function refreshBriefing() { const r = await api('/api/ops/briefings/refresh', { method: 'POST' }); toast(r.ok ? '简报已更新' : r.message); loadPerception(); }
-async function syncSchedule() { const r = await api('/api/ops/schedule/sync', { method: 'POST', body: '{}' }); toast(`状态已更新：${r.current_activity} (${r.mood})`); }
-
-function toggleBackupFields() {
-  const mode = document.getElementById('bkProvider').value;
-  document.getElementById('bkAliyunFields').classList.toggle('hidden', mode !== 'aliyun_openapi');
-  document.getElementById('bkWebdavFields').classList.toggle('hidden', mode !== 'aliyun_webdav');
-  const guide = document.getElementById('bkGuideBox');
-  if (mode === 'aliyun_webdav') {
-    guide.innerHTML = '<strong>🧭 阿里云盘 WebDAV / AList 接入向导（最推荐 · 免申请开发者资质）：</strong><br>① 在宿主机或 1Panel 运行 <code>AList</code> 或 <code>aliyundrive-webdav</code> 并用阿里云盘 App 扫码挂载；<br>② 在下方填入 WebDAV 地址（如 <code>http://127.0.0.1:5244/dav</code>）、账密与自定义目录（如 <code>/EchoSea/backups</code>）；<br>③ 点击「保存配置并生效」→「测试连接」→ 勾选「开启后台定时自动备份」即可全自动托管。';
-  } else if (mode === 'aliyun_openapi') {
-    guide.innerHTML = '<strong>🧭 阿里云盘 OpenAPI 授权向导：</strong><br>① 若已有 <code>Refresh Token</code>，直接粘贴到左侧保存即可；若使用自建开放平台应用，先填右侧 Client ID / Secret 并保存；<br>② 点击「获取授权链接」登录阿里云盘，将回调页面中的 <code>code</code> 粘贴并点「换取 Token」；<br>③ 填好自定义远程路径（如 <code>/EchoSea/backups</code>），点「测试连接」通过后勾选「开启后台定时自动备份」。';
-  } else {
-    guide.innerHTML = '<strong>🧭 本地快照模式：</strong>仅在服务器 <code>./backups</code> 目录生成压缩快照并按保留份数自动清理，适合离线测试。';
-  }
-}
-async function loadOps() {
-  const [pl, bk, upd, bkCfg] = await Promise.all([api('/api/ops/plugins'), api('/api/ops/backups'), api('/api/system/update/status'), api('/api/ops/backup-config')]);
-  document.getElementById('bkProvider').value = bkCfg.provider || 'aliyun_openapi';
-  document.getElementById('bkPath').value = bkCfg.remote_path || '/EchoSea/backups';
-  document.getElementById('bkDriveType').value = bkCfg.aliyun_drive_type || 'backup';
-  document.getElementById('bkClientId').value = bkCfg.aliyun_client_id || '';
-  document.getElementById('bkWdUrl').value = bkCfg.webdav_url || '';
-  document.getElementById('bkWdUser').value = bkCfg.webdav_username || '';
-  document.getElementById('bkAutoEnabled').checked = Boolean(bkCfg.auto_enabled);
-  document.getElementById('bkInterval').value = String(bkCfg.schedule_interval_hours || 24);
-  document.getElementById('bkRetention').value = String(bkCfg.retention_count || 14);
-  document.getElementById('bkLastAuto').textContent = bkCfg.auto_enabled ? (bkCfg.last_auto_backup_at ? `定时备份已开启 · 上次执行：${formatLocalTime(bkCfg.last_auto_backup_at, true)}` : '定时备份已开启 · 等待首次自动执行') : '定时自动备份未开启';
-  document.getElementById('bkAuthBadge').innerHTML = bkCfg.aliyun_authorized ? `<span class="badge ok">已授权 (${esc(bkCfg.aliyun_refresh_token_masked)})</span>` : '<span class="badge warn">未授权：请填入 Refresh Token 或改用 WebDAV 模式</span>';
-  toggleBackupFields();
-  document.getElementById('pluginList').innerHTML = pl.loaded_plugins.map(p=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);"><strong>${esc(p.name)}</strong> <span class="badge info">v${esc(p.version)}</span> <span style="font-size:12px;color:var(--mute);">超时 ${Number(p.timeout_seconds)}s</span><div style="font-size:12.5px;color:var(--ink2);margin-top:3px;">${esc(p.description)}</div></div>`).join('');
-  document.getElementById('backupList').innerHTML = bk.length ? bk.map(b=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;"><span><strong>${esc(b.filename)}</strong> → ${esc(b.remote_target)}</span><span class="badge ${b.status==='success'?'ok':'err'}">${esc(labelOf(STATUS_LABELS, b.status))}</span></div>`).join('') : '<div class="empty-state">暂无备份记录</div>';
-  const modeLabel = upd.mode === 'github_public' ? `GitHub (${esc(upd.github_repo)})` : '未配置 GitHub 仓库';
-  document.getElementById('updateStatusBox').innerHTML = `<div class="pill-list"><span class="badge info">当前版本 v${esc(upd.current_version)}</span><span class="badge purple">${modeLabel}</span><span class="badge ${upd.updater_configured?'ok':'warn'}">${upd.updater_configured?'宿主机更新代理就绪':'未配置宿主机更新代理'}</span></div>`;
-  const fmtUpdMode = m => m === 'github_public' ? 'GitHub' : (m === 'local_repo' ? '受控更新源' : m);
-  document.getElementById('updateJobTable').innerHTML = (upd.jobs || []).length ? upd.jobs.map(j=>`<tr><td><code>${esc(j.job_uid)}</code></td><td>${esc(fmtUpdMode(j.mode))} / ${esc(j.target_ref)}</td><td><code>${esc(j.from_commit||j.from_version)}</code> → <code>${esc(j.to_commit||'-')}</code></td><td><span class="badge ${j.status==='succeeded'?'ok':(j.status==='running'||j.status==='pending'?'info':'err')}">${esc(labelOf(STATUS_LABELS, j.status))}</span></td><td>${esc(j.log_summary)}</td><td>${esc(formatLocalTime(j.created_at))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty-state">暂无在线更新记录</td></tr>';
-}
-async function checkSystemUpdate() {
-  const message = document.getElementById('updateCheckMessage');
-  const trigger = document.getElementById('updateTrigger');
-  LAST_CHECKED_REF = '';
-  trigger.disabled = true;
-  message.textContent = '正在检查更新…';
-  try {
-    const result = await api('/api/system/update/check');
-    if (result.update_available && result.updater_configured && !result.error) {
-      LAST_CHECKED_REF = result.target_ref || '';
-      trigger.disabled = !LAST_CHECKED_REF;
-    }
-    message.textContent = result.error || (result.update_available
-      ? `发现新版本 ${result.latest_version} ${result.release_notes || ''}`
-      : (result.message || '当前已是最新版本。'));
-  } catch (err) {
-    message.textContent = err.message;
-  }
-}
-async function triggerSystemUpdate() {
-  const target = LAST_CHECKED_REF;
-  if (!target || !confirm('确认安装更新？Core 会短暂重启。')) return;
-  LAST_CHECKED_REF = '';
-  document.getElementById('updateTrigger').disabled = true;
-  try {
-    const result = await api('/api/system/update/trigger', { method: 'POST', body: JSON.stringify({ target_ref: target }) });
-    toast(`更新任务 ${result.job_uid} (${result.status})`);
-    await loadOps();
-  } catch (err) {
-    toast(err.message);
-  }
-}
-async function runReflection() { const r = await api('/api/ops/reflection/run', { method: 'POST', body: '{}' }); toast(`反思完成：处理 ${r.processed_messages} 条，更新画像 ${r.profiles_updated}`); }
-document.getElementById('backupConfigForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  await api('/api/ops/backup-config', { method: 'PUT', body: JSON.stringify({
-    provider: document.getElementById('bkProvider').value,
-    remote_path: document.getElementById('bkPath').value.trim() || '/EchoSea/backups',
-    aliyun_drive_type: document.getElementById('bkDriveType').value,
-    aliyun_client_id: document.getElementById('bkClientId').value.trim(),
-    aliyun_client_secret: document.getElementById('bkClientSecret').value.trim() || undefined,
-    aliyun_refresh_token: document.getElementById('bkRefreshToken').value.trim() || undefined,
-    webdav_url: document.getElementById('bkWdUrl').value.trim(),
-    webdav_username: document.getElementById('bkWdUser').value.trim(),
-    webdav_password: document.getElementById('bkWdPass').value.trim() || undefined,
-    auto_enabled: document.getElementById('bkAutoEnabled').checked,
-    schedule_interval_hours: parseInt(document.getElementById('bkInterval').value || '24', 10),
-    retention_count: parseInt(document.getElementById('bkRetention').value || '14', 10)
-  }) });
-  document.getElementById('bkRefreshToken').value = '';
-  document.getElementById('bkClientSecret').value = '';
-  document.getElementById('bkWdPass').value = '';
-  toast('异地备份配置已加密保存'); loadOps();
-});
-async function openAliyunOAuth() {
-  const r = await api('/api/ops/backup-config/oauth-url', { method: 'POST', body: '{}' });
-  if (!r.ok) { toast(r.error || '请先保存 Client ID'); return; }
-  window.open(r.authorize_url, '_blank', 'noopener');
-}
-async function exchangeAliyunCode() {
-  const code = document.getElementById('bkOAuthCode').value.trim();
-  if (!code) { toast('请先粘贴回调 code'); return; }
-  const r = await api('/api/ops/backup-config/exchange-code', { method: 'POST', body: JSON.stringify({ code }) });
-  toast(r.ok ? '阿里云盘授权成功，已加密保存 Refresh Token' : (r.error || '换取失败'));
-  loadOps();
-}
-async function testBackupConn() {
-  toast('正在测试远程备份连接...');
-  const r = await api('/api/ops/backup-config/test', { method: 'POST' });
-  toast(r.ok ? r.message : ('连接失败：' + (r.error || '未知错误')));
-}
-async function triggerBackup() {
-  toast('正在打包并上传异地备份...');
-  const r = await api('/api/ops/backups/trigger', { method: 'POST', body: '{}' });
-  toast(r.ok ? `备份成功：${r.filename} (${Math.max(1,Math.round((r.size_bytes||0)/1024))} KB)` : `备份失败：${r.error_message || '请检查配置'}`);
-  loadOps();
-}
-document.getElementById('pwdForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  await api('/api/auth/password', { method: 'POST', body: JSON.stringify({ old_password: document.getElementById('oldPwd').value, new_password: document.getElementById('newPwd').value }) });
-  toast('管理员密码已更新'); document.getElementById('pwdForm').reset();
-});
-async function setupTotp() {
-  const r = await api('/api/auth/totp/setup', { method: 'POST' });
-  document.getElementById('totpSetupBox').innerHTML = `密钥：<code>${esc(r.secret)}</code><div style="display:flex;gap:6px;margin-top:6px;"><input id="totpVerifyCode" placeholder="输入 6 位验证码" style="width:150px;" /><button class="btn sm" onclick="enableTotp()">确认开启</button></div>`;
-}
-async function enableTotp() {
-  await api('/api/auth/totp/enable', { method: 'POST', body: JSON.stringify({ code: document.getElementById('totpVerifyCode').value.trim() }) });
-  toast('TOTP 二步验证已开启'); document.getElementById('totpSetupBox').innerHTML = '<span class="badge ok">已开启二步验证</span>';
-}
-
-async function loadAlerts() {
-  const [chs, evs] = await Promise.all([api('/api/alerts/channels'), api('/api/alerts/events')]);
-  document.getElementById('alertList').innerHTML = `<div class="pill-list" style="margin-bottom:14px;">${chs.map(c=>`<span class="badge info">${esc(labelOf(ALERT_TYPE_LABELS, c.channel_type))} · ${esc(c.name)}</span>`).join('')||'<span style="color:var(--mute)">尚未配置告警通道</span>'}</div><div class="table-wrap"><table><thead><tr><th>级别</th><th>分类</th><th>标题</th><th>时间</th></tr></thead><tbody>${evs.map(e=>`<tr><td><span class="badge ${e.severity==='critical'?'err':(e.severity==='warning'?'warn':'info')}">${esc(labelOf(SEVERITY_LABELS, e.severity))}</span></td><td>${esc(e.category)}</td><td>${esc(e.title)}</td><td>${esc(formatLocalTime(e.created_at))}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-state">暂无告警记录</td></tr>'}</tbody></table></div>`;
-}
-document.getElementById('alertForm').addEventListener('submit', async (e) => { e.preventDefault(); await api('/api/alerts/channels', { method: 'POST', body: JSON.stringify({ channel_type: document.getElementById('aType').value, name: document.getElementById('aName').value.trim(), config: JSON.parse(document.getElementById('aConfig').value) }) }); toast('告警通道已加密保存'); loadAlerts(); });
-async function sendTestAlert() { await api('/api/alerts/test', { method: 'POST' }); toast('测试告警已发送'); loadAlerts(); }
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('echosea_theme', theme);
-  const btn = document.getElementById('themeToggleBtn');
-  if (btn) btn.textContent = theme === 'dark' ? '☀️ 浅色模式' : '🌙 深色模式';
-}
-function toggleTheme() {
-  const cur = document.documentElement.getAttribute('data-theme') || 'light';
-  applyTheme(cur === 'dark' ? 'light' : 'dark');
-}
-(() => {
-  const saved = localStorage.getItem('echosea_theme');
-  const initial = saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  applyTheme(initial);
-})();
-(async () => { if (TOKEN) { try { const me = await api('/api/auth/me'); enterApp(me.username); } catch { logout(); } } })();
-</script>
+<script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

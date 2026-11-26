@@ -73,7 +73,9 @@ def test_online_update_github_check_trigger_callback_and_rollback_alert():
 
     with TestClient(app) as client:
         html = client.get("/").text
-        assert "checkSystemUpdate()" in html and "triggerSystemUpdate()" in html
+        ops_js = client.get("/static/js/ops.js").text
+        assert "check-update" in html and "trigger-update" in html
+        assert "checkSystemUpdate" in ops_js and "triggerSystemUpdate" in ops_js
 
         token = client.post("/api/auth/login", json={"username": "admin", "password": "UpdateTestPass2026!"}).json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}

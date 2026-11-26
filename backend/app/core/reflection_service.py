@@ -7,6 +7,7 @@ Distills L1/L2 ambient group streams into:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -18,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import local_now
 from app.core.model_hub import ModelHubService
 from app.models.db import ChatMessage, GroupExpression, MemoryEpisode, QQIdentity
+
+logger = logging.getLogger(__name__)
 
 SLANG_PATTERN = re.compile(r"「([^」]{2,10})」|“([^”]{2,10})”")
 INTEREST_CUES = {
@@ -188,5 +191,6 @@ class ReflectionService:
                 max_tokens=500,
             )
             return json.loads(res.content)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Nightly reflection LLM extraction failed [%s]: %s", type(exc).__name__, exc)
             return {}

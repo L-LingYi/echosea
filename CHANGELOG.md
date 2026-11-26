@@ -1,5 +1,33 @@
 # 更新日志（Changelog）
 
+## v1.8.0 (2026-11-26)
+- **2GB 生产服务器资源调优与运维安全**：
+  - `docker-compose.yml` 新增内存上限（`postgres: 512m`、`companion-core: 448m`、`searxng: 192m`、`redis: 64m`、`caddy: 64m`、`pg-backup: 128m`）、PostgreSQL 参数调优（`shared_buffers=128MB`、`work_mem=4MB`、`max_connections=40`）、Redis `--maxmemory 48mb --maxmemory-policy allkeys-lru`，及全容器 `json-file` 日志轮转（`max-size=10m`, `max-file=3`）。注：若通过在线更新部署，受宿主机保护机制限制（`Dockerfile`、`docker-compose.yml` 为受保护文件），需手动在宿主机同步 Compose 并重建容器。
+  - 拆分 `requirements.txt` 与 `requirements-dev.txt`，生产镜像剔除测试依赖。
+- **版本化数据库迁移与后端模块化**：
+  - `DatabaseManager` 新增带校验和追踪的 `schema_migrations` 迁移表机制（`apply_versioned_migrations`）及 `db/migrations_v1_3.sql`（补充 `admin_users.token_version`）。
+  - 从 `brain_service.py` 拆分 `prompt_builder.py` 与 `search_orchestrator.py`，从 `model_hub.py` 拆分 `circuit_breaker.py`；清理后端多处静默 `except Exception: pass` 异常吞没并补充结构化警告/调试日志。
+- **前端原生 ES Module 零构建拆分与彻底防 XSS**：
+  - 移除所有 `localStorage` JWT 存储，统一采用 `HttpOnly` Cookie + `credentials: 'same-origin'` + `/api/auth/me` 会话恢复 + 服务端 `/api/auth/logout` 撤销令牌版本。
+  - 将 `frontend/index.html` 样式与脚本拆分为 `frontend/css/app.css` 与 `frontend/js/*.js`（零 Node/构建链），移除动态 HTML 拼接与内联 `onclick` 字符串拼装，改为原生 DOM 构建与 `data-action` 事件委托，并在运维页新增快照恢复与预检（Dry-Run）入口。
+
+## v1.7.0 (2026-11-26)
+- **群聊爆发防抖合批与同群串行互斥**：将 `MessageDebouncer`（默认 `1.5s` 窗口，支持撤回前摘除与停机排空）接入 SnowLuma WebSocket 入站路径（私聊 / `@机器人` / 引用回复立即直通，普通群聊连发自动合批）；在 `CompanionPipeline.process_envelope` 引入按 `group_id` 隔离的异步锁防止同群并发回复乱序或竞态。
+- **多模态看图闭环**：将 `MultimodalService` 正式接入主脑流程，仅在 `direct_pass` 强唤醒或已有 dHash/URL 视觉缓存命中时读取图片（支持 GIF 3×3 拼图与缓存反写），避免闲聊图片消耗额外视觉 Token。
+- **L3 情景记忆混合检索与快照恢复**：`MemoryService.assemble_context()` 新增基于 PostgreSQL `tsvector` + CJK 二元分词词法 + 向量余弦 + 重要度/时间衰减的 RRF 混合重排（SQL 层面严格维持群/私聊半隔离不变），并在 `main_brain` trace 记录召回条数；新增 `BackupService.verify_and_restore()` 与 `POST /api/ops/backups/restore` 事务级快照校验与恢复接口。
+
+## v1.6.0 (2026-11-26)
+- **后端核心缺陷修复与安全加固**：
+  - 修复 `CompanionPipeline` 并发请求时直接覆写 `GatekeeperService.soft_entry_threshold` 实例属性导致配置串群竞态的问题，改为按请求参数只读传递。
+  - `PluginEventBus` 新增 `emit_background()` 并发受控异步派发（主路径不再被外围插件慢阻塞），并将 `error_log` 与 `SnowLumaAdapter.sent_log` 改为 `deque(maxlen=200)` 防止长跑内存膨胀。
+  - 修复 `AutoStickerReactionPlugin` 与 `StickerService.import_manual` 使用受 `PYTHONHASHSEED` 影响的 `hash(url)` 的问题，改为安全下载计算真实 64 位感知哈希 `dHash`（离线或拉取失败时确定性回退至 SHA-256 摘要）。
+  - 认证链路加固：引入受信任代理识别（仅环回或私网代理读取 `X-Real-IP` / `X-Forwarded-For`）、基于 Redis/内存降级的异步登录失败限流、按 HTTPS 协议动态下发 `Secure` Cookie，以及 `AdminUser.token_version`（改密与登出即时吊销已签发会话）。
+  - OneBot Token 校验改用 `hmac.compare_digest` 防计时侧信道；追踪后台 WebSocket 协程并在 `lifespan` 关闭阶段优雅排空；修复 `host_updater.py` 客户端断连 `BrokenPipeError` 崩溃并增加 `/check` 30 秒 TTL 缓存。
+- **统一维护调度、Prompt Cache 调优与门卫全量计费**：
+  - 新增持久化幂等调度器 `CoreScheduler`（60 秒唤醒周期），接管 `LifeScheduleService`、每日早间简报、凌晨离线反思及定时备份。
+  - 重排 `build_prompt_messages()` 为「静态系统提示词+检索准则 -> Few-shot -> 半静态简报/黑话/L2摘要 -> 动态单轮上下文」结构以稳定前缀缓存命中率。
+  - `evaluate_gatekeeper_slot()` 补充提取并记录 `completion_tokens` 与输出费用。
+
 ## v1.5.4 (2026-11-26)
 - **WebUI 全链路日志与记录时间本地化**：新增 `formatLocalTime()` 辅助函数，修复「全链路追踪」「24h 告警通知」「系统在线更新记录」及「定时自动备份上次执行」直接截取 UTC ISO 字符串或硬编码 `UTC` 后缀导致的慢 8 小时显示问题，统一自动转换为浏览器本地时区展示。
 - **后端容器与日程/反思/简报/备份时区统一**：新增 `APP_TIMEZONE`（默认 `Asia/Shanghai`）配置与 `local_now()` 工具函数；在 `docker-compose.yml` 与 `.env.example` 为容器注入 `TZ=Asia/Shanghai`；修复作息状态机 `LifeScheduleService`、离线反思 `ReflectionService`、每日简报 `WebPerceptionService` 及快照备份文件命名原按 UTC 时间/日期计算的问题，并为应用及 Uvicorn 日志补充本地时间戳格式。

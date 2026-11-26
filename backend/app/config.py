@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "EchoSea（回声海）"
-    app_version: str = "1.5.4"
+    app_version: str = "1.8.0"
     app_timezone: str = Field(default="Asia/Shanghai", validation_alias=AliasChoices("app_timezone", "tz"))
     environment: str = "production"
     log_level: str = "INFO"
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     admin_qq: int = 0
 
     # Runtime Guardrails
-    debounce_window_seconds: float = 2.5
+    debounce_window_seconds: float = 1.5
     max_consecutive_group_turns: int = 4
     max_attention_group_turns: int = 8        # Higher cap when user is inside active attention window (soft tightening starts at max_consecutive_group_turns)
     group_rate_limit_per_minute: int = 12

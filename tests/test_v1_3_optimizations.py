@@ -100,10 +100,12 @@ def test_v1_3_e2e_no_unnecessary_quote_empty_guard_and_polished_ui():
     with TestClient(app) as client:
         # 1. Verify polished WebUI markers
         html = client.get("/").text
+        stickers_js = client.get("/static/js/stickers.js").text
+        dashboard_js = client.get("/static/js/dashboard.js").text
         assert "providerModal" in html
         assert "stickerGrid" in html
-        assert "autoTagSticker(" in html
-        assert "progress-fill" in html
+        assert "autoTagSticker(" in stickers_js
+        assert "progress-fill" in dashboard_js
 
         token = client.post("/api/auth/login", json={"username": "admin", "password": "V13TestPass!"}).json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}

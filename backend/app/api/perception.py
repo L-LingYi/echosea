@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -274,3 +274,20 @@ async def trigger_backup_hook(
         "error_message": rec.error_message,
         "bus_result": bus_res,
     }
+
+
+@router.post("/backups/restore")
+async def restore_backup_snapshot(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(default=True),
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    raw_bytes = await file.read()
+    if len(raw_bytes) > 64 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="快照文件超过 64MB 限制")
+    try:
+        return await runtime.backup_service.verify_and_restore(session, raw_bytes, dry_run=dry_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

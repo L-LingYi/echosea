@@ -14,7 +14,7 @@ from app.main import create_app
 
 def test_v1_4_1_readme_version_and_frontend_dark_mode_and_guides():
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "v1.5.4" in readme
+    assert "v1.8.0" in readme
     assert "v1.3.3" not in readme
 
     settings = Settings(
@@ -29,15 +29,17 @@ def test_v1_4_1_readme_version_and_frontend_dark_mode_and_guides():
     app = create_app(settings_override=settings, force_memory_store=True)
 
     with TestClient(app) as client:
-        assert client.get("/healthz").json()["version"] == "1.5.4"
+        assert client.get("/healthz").json()["version"] == "1.8.0"
         html = client.get("/").text
-        # Dark mode support
-        assert 'data-theme="dark"' in html
-        assert "toggleTheme()" in html
-        assert "max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;" in html
+        css = client.get("/static/css/app.css").text
+        api_js = client.get("/static/js/api.js").text
+        # Dark mode support (modularized CSS & JS)
+        assert 'data-theme="dark"' in css
+        assert "function toggleTheme()" in api_js
+        assert "max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;" in css
         # Links-only sticker recommendations + local upload (no remote preset download button)
         assert "stickerFileInput" in html
-        assert "前往仓库下载" in html
+        assert "前往仓库下载" in client.get("/static/js/stickers.js").text
         assert "importStickerPreset('" not in html
         # Backup automation + guided wizard
         assert "bkAutoEnabled" in html

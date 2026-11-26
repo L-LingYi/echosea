@@ -134,8 +134,8 @@ class UpdateService:
                 base["release_url"] = str(data.get("html_url") or "")
                 base["target_ref"] = tag
                 return base
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Release lookup failed for %s, falling back to branch HEAD [%s]: %s", rel_url, type(exc).__name__, exc)
 
         # 2. Fallback to latest commit on configured branch
         commit_url = f"https://api.github.com/repos/{self.github_repo}/commits/{self.git_branch}"

@@ -355,13 +355,14 @@ async def test_local_timezone_for_schedule_backup_and_webui_logs(db_session, mon
     assert filename == "echosea_backup_20261126_010500.json.gz"
 
     # 4. WebUI renders trace/update/alert/backup timestamps via formatLocalTime (no raw UTC slicing)
-    html = Path("frontend/index.html").read_text(encoding="utf-8")
-    assert "function formatLocalTime(" in html
-    assert "formatLocalTime(r.created_at)" in html
-    assert "formatLocalTime(j.created_at)" in html
-    assert "formatLocalTime(e.created_at)" in html
-    assert "formatLocalTime(bkCfg.last_auto_backup_at, true)" in html
-    assert ".slice(5,19).replace('T',' ')" not in html
-    assert "last_auto_backup_at.slice(0,19)" not in html
+    api_js = Path("frontend/js/api.js").read_text(encoding="utf-8")
+    all_js = "\n".join(p.read_text(encoding="utf-8") for p in Path("frontend/js").glob("*.js"))
+    assert "function formatLocalTime(" in api_js
+    assert "formatLocalTime(r.created_at)" in all_js
+    assert "formatLocalTime(j.created_at)" in all_js
+    assert "formatLocalTime(e.created_at)" in all_js
+    assert "formatLocalTime(bkCfg.last_auto_backup_at, true)" in all_js
+    assert ".slice(5,19).replace('T',' ')" not in all_js
+    assert "last_auto_backup_at.slice(0,19)" not in all_js
 
 

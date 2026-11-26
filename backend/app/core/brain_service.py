@@ -1,18 +1,18 @@
-"""Main Brain Service (v1.1):
+"""Main Brain Service (v1.8):
 - Unified `request_id` privacy-safe pipeline tracing (inbound -> gatekeeper -> main_brain -> tts -> onebot).
 - Wires `gatekeeper` model slot (native TypeSafe AI Jev System One or OpenAI-compatible fallback).
-- Separates TTS `synthesis_status` from OneBot `onebot_status` acceptance receipt.
-- Prompt Cache static prefix + 5-Layer Memory + Slow/Fast Internet Perception + Anti-AI + Stickers.
+- Per-group async lock serialization + optional WS burst debouncing + Multimodal vision cache.
+- Delegates prompt construction to `prompt_builder` and web search sessions to `search_orchestrator`.
 """
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
-import re
 import time
 import uuid
 from typing import Any
 
+from sqlalchemy import func as _sql_func
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,139 +21,37 @@ from app.core.gatekeeper import GatekeeperService
 from app.core.identity_service import IdentityService
 from app.core.memory_service import MemoryService
 from app.core.model_hub import ModelHubService
-from app.core.redis_store import StateStore
+from app.core.multimodal_service import MultimodalService, resolve_image_phash
+from app.core.prompt_builder import (
+    DEFAULT_BANNED_PHRASES,
+    DEFAULT_SYSTEM_PROMPT,
+    build_prompt_messages,
+    sanitize_anti_ai_flavor,
+    split_natural_bubbles,
+)
+from app.core.redis_store import MessageDebouncer, StateStore
+from app.core.search_orchestrator import WEB_SEARCH_TOOLS, SearchOrchestrator
 from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService, extract_sticker_tags
 from app.core.tts_service import DoubaoTTSService, detect_voice_intent
 from app.core.web_perception_service import WebPerceptionService
-from app.models.db import ChatMessage, PersonaVersion, PipelineTrace, SystemConfig
+from app.models.db import ChatMessage, ImageVisionCache, PersonaVersion, PipelineTrace, SystemConfig
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
 
 logger = logging.getLogger(__name__)
 
-_SEARCH_FILLER_PHRASES = (
-    "等我查一下哈",
-    "我帮你翻翻看",
-    "稍等，我去搜搜看",
-    "我看看网上咋说的",
-)
-
-WEB_SEARCH_TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": (
-                "搜索互联网获取最新消息、热梗科普、实时数据或你不确定的事实。"
-                "日常闲聊或已有常识即可回答的问题不要调用。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "提炼后的简洁精准搜索关键词（不要直接整段复制聊天原话）",
-                    }
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_webpage",
-            "description": "抓取并阅读指定公网 HTTP/HTTPS 网页的正文内容（用于查看新闻详情或用户发来的链接）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "要阅读的公网 http:// 或 https:// 链接",
-                    }
-                },
-                "required": ["url"],
-            },
-        },
-    },
+__all__ = [
+    "CompanionPipeline",
+    "DEFAULT_BANNED_PHRASES",
+    "DEFAULT_SYSTEM_PROMPT",
+    "WEB_SEARCH_TOOLS",
+    "sanitize_anti_ai_flavor",
+    "split_natural_bubbles",
 ]
-
-DEFAULT_BANNED_PHRASES = [
-    "接住了",
-    "记下了",
-    "作为AI",
-    "作为一个人工智能",
-    "作为语言模型",
-    "我理解你的感受",
-    "希望这能帮到你",
-    "如果你还有其他问题",
-    "很高兴为你解答",
-]
-
-DEFAULT_SYSTEM_PROMPT = (
-    "你是小呆呆，群里相处很久的损友兼陪伴者。说话自然简短、像真人打字，不要像客服或AI助手。"
-    "严禁使用“接住了、记下了、作为AI、我理解你的感受、希望这能帮到你”等机械套话。"
-    "不要盲目讨好或过度道歉，该吐槽就吐槽，不知道就直说不知道。"
-    "需要斗图时可在句尾附轻量标签如 [sticker:laugh] 或 [表情:无语]。"
-)
-
-
-def sanitize_anti_ai_flavor(text: str, banned_phrases: list[str] | None = None) -> str:
-    """Defense 1 & 4: Strip AI clichés, markdown formatting noise, and robotic boilerplate."""
-    cleaned = text.strip()
-    cleaned = re.sub(r"</?tts\s*>", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"[（(](?:歪头|笑|偷笑|叹气|点头|捂脸|眨眼|摇头)[）)]", "", cleaned)
-    cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
-    cleaned = re.sub(r"^#{1,6}\s+", "", cleaned, flags=re.MULTILINE)
-
-    phrases = banned_phrases if banned_phrases is not None else DEFAULT_BANNED_PHRASES
-    for phrase in phrases:
-        if phrase and phrase in cleaned:
-            cleaned = cleaned.replace(phrase, "")
-
-    cleaned = re.sub(r"^[，,。！!、\s]+", "", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned or "emmm"
-
-
-def split_natural_bubbles(text: str, max_bubbles: int = 3) -> list[str]:
-    """Defense 3: Split long replies into natural QQ bubbles while strictly protecting quoted text."""
-    text = text.strip()
-    if not text or len(text) <= 28:
-        return [text] if text else []
-
-    placeholders: dict[str, str] = {}
-
-    def _mask(match: re.Match[str]) -> str:
-        key = f"__QUOTE_{len(placeholders)}__"
-        placeholders[key] = match.group(0)
-        return key
-
-    masked = re.sub(r'(“[^”]*”|"[^"]*"|「[^」]*」)', _mask, text)
-    raw_parts = re.split(r"(?<=[。！？!?])\s+|\n+", masked)
-    parts = [p.strip() for p in raw_parts if p.strip()]
-    if not parts:
-        parts = [masked]
-
-    bubbles: list[str] = []
-    for part in parts:
-        if len(bubbles) >= max_bubbles:
-            bubbles[-1] = f"{bubbles[-1]} {part}"
-        elif bubbles and len(bubbles[-1]) < 10:
-            bubbles[-1] = f"{bubbles[-1]} {part}"
-        else:
-            bubbles.append(part)
-
-    restored: list[str] = []
-    for b in bubbles:
-        for key, original in placeholders.items():
-            b = b.replace(key, original)
-        restored.append(b.strip())
-    return [b for b in restored if b]
 
 
 class CompanionPipeline:
-    """End-to-end orchestrator across all 10 subsystems with unified request_id tracing."""
+    """End-to-end orchestrator across all subsystems with unified request_id tracing."""
 
     def __init__(
         self,
@@ -167,6 +65,7 @@ class CompanionPipeline:
         sticker_service: StickerService | None = None,
         tts_service: DoubaoTTSService | None = None,
         web_perception: WebPerceptionService | None = None,
+        multimodal_service: MultimodalService | None = None,
         admin_qq: int = 0,
         group_rate_limit_per_min: int = 12,
         global_rate_limit_per_min: int = 40,
@@ -178,6 +77,7 @@ class CompanionPipeline:
         stale_soft_entry_min_msgs: int = 5,
         smart_quote_min_intervening: int = 3,
         smart_quote_min_delay_seconds: float = 25.0,
+        debounce_window_seconds: float = 0.0,
     ) -> None:
         self.store = store
         self.identity_service = identity_service
@@ -189,6 +89,8 @@ class CompanionPipeline:
         self.sticker_service = sticker_service
         self.tts_service = tts_service
         self.web_perception = web_perception
+        self.multimodal_service = multimodal_service
+        self.search_orchestrator = SearchOrchestrator(model_hub=model_hub, web_perception=web_perception)
         self.admin_qq = admin_qq
         self.group_rate_limit_per_min = group_rate_limit_per_min
         self.global_rate_limit_per_min = global_rate_limit_per_min
@@ -200,7 +102,19 @@ class CompanionPipeline:
         self.stale_soft_entry_min_msgs = stale_soft_entry_min_msgs
         self.smart_quote_min_intervening = smart_quote_min_intervening
         self.smart_quote_min_delay_seconds = smart_quote_min_delay_seconds
+        self._debounce_window_seconds = max(0.0, float(debounce_window_seconds))
+        self.debouncer = MessageDebouncer(window_seconds=self._debounce_window_seconds or 1.5)
         self._group_msg_counters: dict[int, int] = {}
+        self._group_locks: dict[int, asyncio.Lock] = {}
+
+    build_prompt_messages = staticmethod(build_prompt_messages)
+
+    def _get_group_lock(self, group_id: int) -> asyncio.Lock:
+        lock = self._group_locks.get(group_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._group_locks[group_id] = lock
+        return lock
 
     @staticmethod
     async def _trace(
@@ -286,14 +200,37 @@ class CompanionPipeline:
                 merged.update(row.config_json)
         return merged
 
+    @staticmethod
+    def _merge_burst_envelopes(batch: list[MessageEnvelope]) -> MessageEnvelope:
+        """Combine rapid consecutive envelopes from the same speaker into one envelope."""
+        if len(batch) == 1:
+            return batch[0]
+        latest = batch[-1]
+        texts = [e.raw_text.strip() for e in batch if (e.raw_text or "").strip()]
+        merged_mentions: list[int] = []
+        merged_media: list[dict[str, Any]] = []
+        for env in batch:
+            for qq in env.mentioned_qqs:
+                if qq not in merged_mentions:
+                    merged_mentions.append(qq)
+            merged_media.extend(env.media_meta)
+        return latest.model_copy(
+            update={
+                "raw_text": "\n".join(texts),
+                "mentioned_qqs": merged_mentions,
+                "media_meta": merged_media,
+            }
+        )
+
     async def handle_raw_onebot_event(self, session: AsyncSession, raw_event: dict[str, Any]) -> dict[str, Any]:
-        """Entry point for any SnowLuma OneBot v11 event (message or notice)."""
+        """Entry point for synchronous/HTTP OneBot v11 events (message or notice)."""
         request_id = f"req_{uuid.uuid4().hex[:12]}"
         post_type = raw_event.get("post_type")
 
         if post_type == "notice" and raw_event.get("notice_type") in ("group_recall", "friend_recall"):
             msg_id = str(raw_event.get("message_id", ""))
             if msg_id:
+                self.debouncer.remove_recalled_message(msg_id)
                 await self.store.mark_recalled(msg_id)
                 updated = await self.memory_service.mark_message_recalled(session, msg_id)
                 await self._trace(
@@ -316,7 +253,113 @@ class CompanionPipeline:
         )
         return await self.process_envelope(session, envelope, request_id=request_id)
 
+    async def enqueue_or_handle_raw_event(self, session_factory: Any, raw_event: dict[str, Any]) -> dict[str, Any]:
+        """WebSocket ingress: handles recalls immediately and debounces non-direct group burst chatter."""
+        post_type = raw_event.get("post_type")
+        if post_type == "notice" or self._debounce_window_seconds <= 0.0:
+            async with session_factory() as s:
+                res = await self.handle_raw_onebot_event(s, raw_event)
+                await s.commit()
+                return res
+
+        async with session_factory() as s:
+            envelope = await self.adapter.normalize_event(raw_event, session=s)
+            await s.commit()
+        if envelope is None:
+            return {"handled": "ignored"}
+
+        dkey = f"{envelope.scene}:{envelope.group_id or 0}:{envelope.sender_qq}"
+        is_immediate = (
+            envelope.scene == "private"
+            or (envelope.self_qq > 0 and envelope.self_qq in envelope.mentioned_qqs)
+            or bool(envelope.reply_to_msg_id)
+        )
+
+        async def _run_batch(batch: list[MessageEnvelope]) -> dict[str, Any]:
+            merged = self._merge_burst_envelopes(batch)
+            req_id = f"req_{uuid.uuid4().hex[:12]}"
+            async with session_factory() as s:
+                await self._trace(
+                    s, req_id, merged.scene, merged.group_id, "inbound", "ok",
+                    meta={"batched_count": len(batch), "media_count": len(merged.media_meta)},
+                )
+                out = await self.process_envelope(s, merged, request_id=req_id)
+                await s.commit()
+                return out
+
+        if is_immediate:
+            pending = await self.debouncer.flush_key_now(dkey, None)
+            return await _run_batch([*pending, envelope])
+
+        await self.debouncer.push(dkey, envelope, _run_batch)
+        return {"handled": "debounced", "debounce_key": dkey}
+
+    async def _collect_vision_context(
+        self,
+        session: AsyncSession,
+        envelope: MessageEnvelope,
+        decision: GatekeeperDecision,
+    ) -> tuple[list[dict[str, Any]], list[str], list[str], int]:
+        """On-demand vision: decode/cache up to 2 images on direct_pass or existing vision cache hit."""
+        if self.multimodal_service is None or not envelope.media_meta:
+            return [], [], [], 0
+
+        image_items = [m for m in envelope.media_meta if m.get("type") in ("image", "mface") and m.get("url")][:2]
+        if not image_items:
+            return [], [], [], 0
+
+        image_blocks: list[dict[str, Any]] = []
+        vision_hints: list[str] = []
+        pending_phashes: list[str] = []
+        cache_hits = 0
+        fetcher = getattr(self.multimodal_service, "image_fetcher", None)
+
+        for item in image_items:
+            url = str(item["url"])
+            is_gif = url.lower().endswith(".gif")
+            # Check URL match in vision cache first to avoid unnecessary downloads
+            cached_by_url = (
+                await session.execute(select(ImageVisionCache).where(ImageVisionCache.source_url == url).limit(1))
+            ).scalar_one_or_none()
+            if cached_by_url is not None and cached_by_url.description:
+                vision_hints.append(cached_by_url.description)
+                cache_hits += 1
+                continue
+
+            if decision.action != "direct_pass":
+                continue
+
+            phash, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
+            if img_bytes is not None:
+                res = await self.multimodal_service.lookup_or_prepare(session, img_bytes, source_url=url, is_gif=is_gif)
+                if res.get("cache_hit") and res.get("description"):
+                    vision_hints.append(str(res["description"]))
+                    cache_hits += 1
+                elif res.get("content_block"):
+                    image_blocks.append(res["content_block"])
+                    pending_phashes.append(str(res["phash"]))
+            else:
+                cached_by_hash = (
+                    await session.execute(select(ImageVisionCache).where(ImageVisionCache.phash == phash).limit(1))
+                ).scalar_one_or_none()
+                if cached_by_hash is not None and cached_by_hash.description:
+                    vision_hints.append(cached_by_hash.description)
+                    cache_hits += 1
+
+        return image_blocks, vision_hints, pending_phashes, cache_hits
+
     async def process_envelope(
+        self,
+        session: AsyncSession,
+        envelope: MessageEnvelope,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        if envelope.scene == "group" and envelope.group_id is not None:
+            async with self._get_group_lock(envelope.group_id):
+                return await self._process_envelope_locked(session, envelope, request_id=request_id)
+        return await self._process_envelope_locked(session, envelope, request_id=request_id)
+
+    async def _process_envelope_locked(
         self,
         session: AsyncSession,
         envelope: MessageEnvelope,
@@ -347,10 +390,10 @@ class CompanionPipeline:
 
         replied_to_bot = bool(envelope.self_qq and envelope.quoted_sender_qq == envelope.self_qq)
 
-        # 3. Three-Layer Gatekeeper Evaluation (wired to Jev System One / gatekeeper slot if configured!)
+        # 3. Three-Layer Gatekeeper Evaluation (lock-free threshold passed per request)
         t_gk = time.perf_counter()
         budget_fuse = await self.model_hub.is_budget_fuse_active(session)
-        self.gatekeeper.soft_entry_threshold = float(cfg.get("soft_entry_threshold", self.gatekeeper.soft_entry_threshold))
+        req_soft_entry_threshold = float(cfg.get("soft_entry_threshold", self.gatekeeper.soft_entry_threshold))
 
         async def _gatekeeper_model_scorer(env: MessageEnvelope, default_target: str) -> dict[str, Any] | None:
             recent_lines: list[str] = []
@@ -375,7 +418,7 @@ class CompanionPipeline:
                 f"Quoted: {env.expanded_reply_text or 'none'}\n"
                 f"Latest message: {env.raw_text}"
             )
-            att_age = await self.store.get_user_attention_age_seconds(env.group_id or 0, env.sender_qq) if env.scene == 'group' else None
+            att_age = await self.store.get_user_attention_age_seconds(env.group_id or 0, env.sender_qq) if env.scene == "group" else None
             if att_age is not None:
                 state_text += f"\n[Active Attention Window] Bot replied to this user {int(att_age)}s ago; prefer continuing conversation unless clearly talking to someone else."
             elif env.scene == "group" and env.group_id is not None:
@@ -402,6 +445,7 @@ class CompanionPipeline:
             budget_fuse_active=budget_fuse,
             admin_qq=self.admin_qq,
             llm_scorer=_gatekeeper_model_scorer,
+            soft_entry_threshold=req_soft_entry_threshold,
         )
         gk_ms = int((time.perf_counter() - t_gk) * 1000)
         gk_slow = gk_ms > self.ideal_gatekeeper_ms
@@ -434,9 +478,10 @@ class CompanionPipeline:
                     self._group_msg_counters[envelope.group_id] = 0
                     await self.memory_service.build_ambient_summary(session, envelope.group_id)
 
-        await self.event_bus.emit(
+        self.event_bus.emit_background(
             "on_message_evaluated",
             {"request_id": request_id, "envelope": envelope.model_dump(mode="json"), "decision": decision.model_dump()},
+            max_concurrency=2,
         )
 
         if decision.action in ("silent", "blocked_recall"):
@@ -481,12 +526,16 @@ class CompanionPipeline:
             await self._trace(session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status)
             return {"handled": "voice_fallback_text", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
 
-        # 7. Assemble 5-Layer Memory + Slow Daily Briefing
+        # 7. Assemble 5-Layer Memory (Hybrid L3 Recall) + On-demand Multimodal Vision + Slow Daily Briefing
+        image_blocks, vision_hints, pending_vision_phashes, vision_cache_hits = await self._collect_vision_context(
+            session, envelope, decision
+        )
         memory_ctx = await self.memory_service.assemble_context(
             session=session,
             scene=envelope.scene,
             sender_qq=envelope.sender_qq,
             group_id=envelope.group_id,
+            query_text=envelope.raw_text,
         )
         briefing_text = ""
         if self.web_perception is not None:
@@ -500,11 +549,13 @@ class CompanionPipeline:
             briefing_text=briefing_text,
             enable_search_tools=(self.web_perception is not None),
             enable_webpage_fetch=bool(self.web_perception and self.web_perception.webpage_fetch_enabled),
+            image_blocks=image_blocks or None,
+            vision_hints=vision_hints or None,
         )
 
         # 8. Invoke Main Brain via Model Control Center (with autonomous Tool Calling)
         t_brain = time.perf_counter()
-        search_tools = self._active_search_tools()
+        search_tools = self.search_orchestrator.active_search_tools()
         try:
             completion = await self.model_hub.chat_complete(
                 session=session,
@@ -524,6 +575,10 @@ class CompanionPipeline:
                     "provider": completion.provider_name,
                     "used_fallback": completion.used_fallback,
                     "tool_calls": len(completion.tool_calls),
+                    "recalled_episodes": memory_ctx.get("l3_recall_meta", {}).get("recalled_count", len(memory_ctx["l3_episodes"])),
+                    "recall_mode": memory_ctx.get("l3_recall_meta", {}).get("mode", "default"),
+                    "vision_cache_hits": vision_cache_hits,
+                    "vision_blocks": len(image_blocks),
                 },
             )
         except Exception as exc:
@@ -542,7 +597,9 @@ class CompanionPipeline:
         filler_text: str | None = None
         filler_delivery: dict[str, Any] | None = None
         if completion.tool_calls and self.web_perception is not None:
-            filler_text = self._pick_search_filler(completion.content, list(persona.banned_phrases or []), request_id)
+            filler_text = self.search_orchestrator.pick_search_filler(
+                completion.content, list(persona.banned_phrases or []), request_id
+            )
             if voice_intent != "answer_voice":
                 f_out = await self.adapter.send_message(
                     session,
@@ -557,7 +614,7 @@ class CompanionPipeline:
                     "status": f_out.status,
                     "onebot_status": f_out.onebot_status,
                 }
-            completion, search_queries = await self._execute_isolated_search_session(
+            completion, search_queries = await self.search_orchestrator.execute_isolated_search_session(
                 session=session,
                 persona=persona,
                 memory_ctx=memory_ctx,
@@ -567,12 +624,9 @@ class CompanionPipeline:
                 base_messages=messages,
                 initial_completion=completion,
                 request_id=request_id,
+                trace_fn=self._trace,
             )
 
-        # Tiered SLA Policy:
-        # - direct_pass (explicit wake-up / DM): NEVER dropped; only warn on Dashboard if > ideal_reply_ms.
-        # - soft_entry (unsolicited chime-in): warn on Dashboard if slow, and drop ONLY if severely stale (>=35s & >=5 newer msgs)
-        #   and no filler message was already sent.
         total_elapsed_s = time.perf_counter() - t_start
         total_elapsed_ms = int(total_elapsed_s * 1000)
         if total_elapsed_ms > self.ideal_reply_ms:
@@ -601,6 +655,11 @@ class CompanionPipeline:
         # 9. Extract Sticker Tags + Anti-AI-Flavor Sanitization
         text_without_tags, sticker_tags = extract_sticker_tags(completion.content)
         cleaned = sanitize_anti_ai_flavor(text_without_tags, list(persona.banned_phrases or []))
+
+        if pending_vision_phashes and self.multimodal_service is not None and cleaned:
+            summary_note = f"图意({(envelope.raw_text or '').strip()[:30] or '无配文'}) -> 回复参考: {cleaned[:80]}"
+            for ph in pending_vision_phashes:
+                await self.multimodal_service.save_vision_description(session, ph, summary_note)
 
         # 10. Voice synthesis if requested ('answer_voice')
         if voice_intent == "answer_voice" and self.tts_service is not None:
@@ -640,7 +699,7 @@ class CompanionPipeline:
                         "provider": completion.provider_name,
                     }
 
-        # 11. Natural Bubble Splitting + Smart Buried-Only Quoting (evaluated at send time!)
+        # 11. Natural Bubble Splitting + Smart Buried-Only Quoting
         t_ob = time.perf_counter()
         should_quote = False
         if envelope.scene == "group" and envelope.group_id is not None:
@@ -690,7 +749,6 @@ class CompanionPipeline:
                 stk_out.request_id = request_id
                 sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
 
-        # Persist bot's own reply into L1 working memory so future turns know who said what
         bot_qq = envelope.self_qq or self.adapter.bot_qq
         if bot_qq and bubbles:
             await self.identity_service.upsert_from_message(
@@ -735,148 +793,6 @@ class CompanionPipeline:
             "used_fallback": completion.used_fallback,
         }
 
-    def _active_search_tools(self) -> list[dict[str, Any]] | None:
-        if self.web_perception is None:
-            return None
-        if self.web_perception.webpage_fetch_enabled:
-            return WEB_SEARCH_TOOLS
-        return [t for t in WEB_SEARCH_TOOLS if t.get("function", {}).get("name") != "fetch_webpage"]
-
-    @staticmethod
-    def _pick_search_filler(raw_content: str, banned_phrases: list[str], request_id: str) -> str:
-        """Choose immediate non-blocking filler text before running web search."""
-        text_only, _ = extract_sticker_tags(raw_content or "")
-        candidate = re.sub(r"</?tts\s*>", "", text_only, flags=re.IGNORECASE).strip()
-        if candidate:
-            cleaned = sanitize_anti_ai_flavor(candidate, banned_phrases)
-            if cleaned and cleaned != "emmm":
-                return cleaned[:60]
-        idx = sum(ord(ch) for ch in request_id) % len(_SEARCH_FILLER_PHRASES)
-        return _SEARCH_FILLER_PHRASES[idx]
-
-    @staticmethod
-    def _parse_tool_args(raw_args: Any) -> dict[str, Any]:
-        if isinstance(raw_args, dict):
-            return raw_args
-        if isinstance(raw_args, str) and raw_args.strip():
-            try:
-                parsed = json.loads(raw_args)
-                if isinstance(parsed, dict):
-                    return parsed
-            except Exception:
-                return {"query": raw_args.strip()}
-        return {}
-
-    async def _execute_isolated_search_session(
-        self,
-        session: AsyncSession,
-        persona: PersonaVersion,
-        memory_ctx: dict[str, Any],
-        envelope: MessageEnvelope,
-        decision: GatekeeperDecision,
-        briefing_text: str,
-        base_messages: list[dict[str, Any]],
-        initial_completion: Any,
-        request_id: str,
-    ) -> tuple[Any, list[str]]:
-        """Run tool calls + answer synthesis in a fresh isolated model session (`search:{request_id}`)."""
-        search_session_scope = f"search:{request_id}"
-        search_messages = list(base_messages)
-        current = initial_completion
-        queries: list[str] = []
-        collected_snippets: list[str] = []
-        t_search = time.perf_counter()
-
-        for round_idx in range(2):
-            if not current.tool_calls or self.web_perception is None:
-                break
-            assistant_msg = dict(current.raw_message) if current.raw_message else {}
-            assistant_msg.setdefault("role", "assistant")
-            assistant_msg.setdefault("content", current.content or None)
-            assistant_msg["tool_calls"] = current.tool_calls
-            search_messages.append(assistant_msg)
-
-            for tc_idx, tc in enumerate(current.tool_calls[:3]):
-                fn = tc.get("function") or {}
-                fn_name = str(fn.get("name") or "")
-                args = self._parse_tool_args(fn.get("arguments"))
-                tc_id = str(tc.get("id") or f"call_{round_idx}_{tc_idx}")
-
-                if fn_name == "web_search":
-                    q = str(args.get("query") or envelope.raw_text).strip()
-                    queries.append(q)
-                    res = await self.web_perception.fast_search(session, q)
-                    tool_output = res or "未找到相关公开搜索结果，请如实告知没查到确切信息，不要编造。"
-                elif fn_name == "fetch_webpage":
-                    url = str(args.get("url") or "").strip()
-                    queries.append(url)
-                    tool_output = await self.web_perception.fetch_webpage(url)
-                else:
-                    tool_output = f"未知工具: {fn_name}"
-
-                collected_snippets.append(tool_output)
-                search_messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc_id,
-                        "name": fn_name,
-                        "content": tool_output,
-                    }
-                )
-
-            next_tools = self._active_search_tools() if round_idx == 0 else None
-            try:
-                current = await self.model_hub.chat_complete(
-                    session=session,
-                    slot="main_brain",
-                    messages=search_messages,
-                    temperature=0.75,
-                    max_tokens=600 if decision.action == "direct_pass" else 180,
-                    source="production",
-                    request_id=request_id,
-                    session_scope=search_session_scope,
-                    tools=next_tools,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Tool-role synthesis failed in isolated search session (%s); falling back to context injection: %s",
-                    search_session_scope,
-                    exc,
-                )
-                fallback_msgs = self.build_prompt_messages(
-                    persona,
-                    memory_ctx,
-                    envelope,
-                    decision,
-                    briefing_text=briefing_text,
-                    fast_search_text="\n\n".join(collected_snippets)[:4000],
-                    enable_search_tools=False,
-                )
-                current = await self.model_hub.chat_complete(
-                    session=session,
-                    slot="main_brain",
-                    messages=fallback_msgs,
-                    temperature=0.75,
-                    max_tokens=600 if decision.action == "direct_pass" else 180,
-                    source="production",
-                    request_id=request_id,
-                    session_scope=search_session_scope,
-                )
-                break
-
-        await self._trace(
-            session,
-            request_id,
-            envelope.scene,
-            envelope.group_id,
-            "web_search",
-            "ok" if queries else "skipped",
-            latency_ms=int((time.perf_counter() - t_search) * 1000),
-            meta={"queries": queries, "session_scope": search_session_scope},
-        )
-        return current, queries
-
-
     @staticmethod
     def _gatekeeper_reason_code(decision: GatekeeperDecision) -> str:
         """Map GatekeeperDecision reason into a privacy-safe diagnostic code (zero raw chat text)."""
@@ -913,7 +829,6 @@ class CompanionPipeline:
         group_id: int,
         target_message_id: str,
     ) -> int:
-        from sqlalchemy import func as _sql_func
         target_row = (
             await session.execute(
                 select(ChatMessage.id)
@@ -952,103 +867,3 @@ class CompanionPipeline:
         if after_filler and newer_count >= 1:
             return True
         return newer_count >= self.smart_quote_min_intervening
-
-    @staticmethod
-    def build_prompt_messages(
-        persona: PersonaVersion,
-        memory_ctx: dict[str, Any],
-        envelope: MessageEnvelope,
-        decision: GatekeeperDecision,
-        briefing_text: str = "",
-        fast_search_text: str = "",
-        enable_search_tools: bool = False,
-        enable_webpage_fetch: bool = True,
-    ) -> list[dict[str, Any]]:
-        """Prompt Cache optimized layout: static system prompt + few-shot prefix FIRST, dynamic memory AFTER."""
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": (
-                    f"{persona.system_prompt}\n"
-                    f"你的名字是「{persona.bot_name}」，常用别称：{', '.join(persona.aliases or [])}。\n"
-                    f"禁止使用的词句：{', '.join(persona.banned_phrases or [])}。"
-                ),
-            }
-        ]
-        for ex in persona.few_shot_examples or []:
-            if ex.get("user") and ex.get("assistant"):
-                messages.append({"role": "user", "content": ex["user"]})
-                messages.append({"role": "assistant", "content": ex["assistant"]})
-
-        dynamic_parts = [
-            f"[当前场景] {'群聊' if envelope.scene == 'group' else '私聊'}",
-            f"[当前自身状态] 精力:{memory_ctx['l5_self_state']['energy_level']} 心情:{memory_ctx['l5_self_state']['mood']} 正在:{memory_ctx['l5_self_state']['current_activity']}",
-            f"[当前发言人画像] {json.dumps(memory_ctx['l4_acquaintance'], ensure_ascii=False)}",
-        ]
-        if briefing_text:
-            dynamic_parts.append(f"[今日刷网背景常识]\n{briefing_text}")
-        if fast_search_text:
-            dynamic_parts.append(f"[按需联网搜索结果（请消化后用自己口吻自然转述）]\n{fast_search_text}")
-        if enable_search_tools:
-            if enable_webpage_fetch:
-                tool_intro = "你拥有 web_search（联网搜索）和 fetch_webpage（读取网页正文）工具。"
-                tool_scope = "实时新闻、近期热梗、最新价格/赛程/数据、你不确定的事实或用户发来网页链接需要阅读时自主调用"
-            else:
-                tool_intro = "你拥有 web_search（联网搜索）工具。"
-                tool_scope = "实时新闻、近期热梗、最新价格/赛程/数据或你不确定的事实时自主调用"
-            dynamic_parts.append(
-                f"[联网工具使用准则] {tool_intro}"
-                f"仅在涉及{tool_scope}；"
-                "日常闲聊或常识问题直接回复，不要滥用。决定调用工具时，可以在回复文本里附带一句极简自然的过渡语（如「等我查一下哈」），不要解释工具参数。"
-            )
-        if memory_ctx["l2_ambient_summaries"]:
-            dynamic_parts.append("[近期群聊边缘旁听摘要]\n" + "\n".join(memory_ctx["l2_ambient_summaries"]))
-        if memory_ctx["l1_group_to_dm_bridge"]:
-            dynamic_parts.append(
-                "[30分钟内该用户在群里的发言]\n"
-                + "\n".join(f"- {m['text']}" for m in memory_ctx["l1_group_to_dm_bridge"])
-            )
-        if memory_ctx["l3_episodes"]:
-            dynamic_parts.append(
-                "[相关情景记忆]\n" + "\n".join(f"- {e['title']}: {e['content']}" for e in memory_ctx["l3_episodes"])
-            )
-        if memory_ctx["l4_group_slang"]:
-            dynamic_parts.append(
-                "[群内常用黑话] " + ", ".join(f"{s['phrase']}({s['meaning']})" for s in memory_ctx["l4_group_slang"])
-            )
-        if memory_ctx["l1_working"]:
-            # Exclude duplicate trailing copy of the exact current user message
-            history_items = list(memory_ctx["l1_working"][-14:])
-            if (
-                history_items
-                and history_items[-1].get("sender_qq") == envelope.sender_qq
-                and history_items[-1].get("text") == envelope.raw_text
-            ):
-                history_items = history_items[:-1]
-            if history_items:
-                recent = "\n".join(
-                    f"[{m['sender']}(QQ:{m['sender_qq']})]: {m['text']}"
-                    + (f" (引用: {m['reply_to']})" if m.get("reply_to") else "")
-                    for m in history_items[-12:]
-                )
-                dynamic_parts.append(f"[近期群聊/私聊上下文（严格按发言人区分，切勿张冠李戴）]\n{recent}")
-        dynamic_parts.append(
-            f"[发言人归属锚点] 下面即将回复的这条消息由「{envelope.display_name}」(QQ:{envelope.sender_qq})发出。"
-            "请务必分清上下文中每一位群友各自说的话，不要把别人(例如前一条发言人)的特征或观点错安到当前发言人头上。"
-        )
-
-        if decision.action == "soft_entry":
-            dynamic_parts.append(f"[发言约束] 本次为降权软切入，请保持极简短吐槽或接梗，不超过 {decision.suggested_max_chars} 字。")
-
-        voice_intent = detect_voice_intent(envelope.raw_text, bool(envelope.expanded_reply_text))
-        if voice_intent == "answer_voice":
-            dynamic_parts.append("【输出协议】本轮是语音回答，整条只输出一对 <tts>...</tts>，里面只写口播纯文本。")
-        else:
-            dynamic_parts.append("【输出协议】直接写聊天正文，不输出语音标签。")
-
-        messages.append({"role": "system", "content": "\n\n".join(dynamic_parts)})
-        user_line = f"{envelope.display_name}: {envelope.raw_text}"
-        if envelope.expanded_reply_text:
-            user_line = f"[引用原句: {envelope.expanded_reply_text}]\n{user_line}"
-        messages.append({"role": "user", "content": user_line})
-        return messages

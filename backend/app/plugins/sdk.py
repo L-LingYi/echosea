@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.event_bus import PluginEventBus
+from app.core.multimodal_service import resolve_image_phash
 from app.models.db import BackupRecord
 
 logger = logging.getLogger(__name__)
@@ -58,10 +59,12 @@ class AutoStickerReactionPlugin(CompanionPlugin):
                 surrounding = [f"{r[0]}: {r[1]}" for r in reversed(recent_rows) if r[1]]
                 for item in media:
                     if item.get("type") in ("image", "mface") and item.get("url"):
+                        fetcher = getattr(getattr(runtime, "multimodal_service", None), "image_fetcher", None)
+                        phash, _img_bytes = await resolve_image_phash(str(item["url"]), timeout=3.0, fetcher=fetcher)
                         asset = await runtime.sticker_service.observe_group_image(
                             session=session,
                             group_id=group_id,
-                            phash=f"url_{abs(hash(item['url'])) % (10**16):016x}",
+                            phash=phash,
                             source_url=str(item["url"]),
                             context_hint=str(env.get("raw_text") or ""),
                         )

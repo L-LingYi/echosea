@@ -118,12 +118,15 @@ def test_provider_extra_config_preserved_and_unified_memory_sea_ui():
     app = create_app(settings_override=settings, force_memory_store=True, http_caller=mock_llm)
 
     with TestClient(app) as client:
-        # Verify unified Memory Sea UI (no duplicate tab-memory) & XSS esc() helper
+        # Verify unified Memory Sea UI (no duplicate tab-memory) & modular XSS esc() helper
         html = client.get("/").text
         assert "记忆意识海" in html
         assert 'id="tab-memory"' not in html
-        assert "function esc(" in html
-        assert "editProvider(" in html
+        assert "/static/js/app.js" in html
+        api_js = client.get("/static/js/api.js").text
+        providers_js = client.get("/static/js/providers.js").text
+        assert "function esc(" in api_js
+        assert "editProvider(" in providers_js
 
         token = client.post("/api/auth/login", json={"username": "admin", "password": "HardeningPass2026!"}).json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}

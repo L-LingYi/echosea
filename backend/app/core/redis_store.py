@@ -99,6 +99,43 @@ class StateStore:
         self._zsets[key] = ts_list
         return True
 
+    # --- Login failure rate limiting (distributed via Redis when connected, in-memory fallback otherwise) ---
+    async def is_login_blocked(self, ip: str, max_attempts: int = 5, window_seconds: int = 300) -> bool:
+        now = time.time()
+        cutoff = now - window_seconds
+        key = f"login_fail:{ip}"
+        if self._redis is not None:
+            pipe = self._redis.pipeline()
+            pipe.zremrangebyscore(key, 0, cutoff)
+            pipe.zcard(key)
+            _, count = await pipe.execute()
+            return int(count) >= max_attempts
+        ts_list = [t for t in self._zsets[key] if t > cutoff]
+        self._zsets[key] = ts_list
+        return len(ts_list) >= max_attempts
+
+    async def record_login_failure(self, ip: str, window_seconds: int = 300) -> None:
+        now = time.time()
+        cutoff = now - window_seconds
+        key = f"login_fail:{ip}"
+        if self._redis is not None:
+            pipe = self._redis.pipeline()
+            pipe.zremrangebyscore(key, 0, cutoff)
+            pipe.zadd(key, {f"{now}:{time.monotonic_ns()}": now})
+            pipe.expire(key, window_seconds + 10)
+            await pipe.execute()
+            return
+        ts_list = [t for t in self._zsets[key] if t > cutoff]
+        ts_list.append(now)
+        self._zsets[key] = ts_list
+
+    async def reset_login_failures(self, ip: str) -> None:
+        key = f"login_fail:{ip}"
+        if self._redis is not None:
+            await self._redis.delete(key)
+            return
+        self._zsets.pop(key, None)
+
     # --- Active thread tracking for 3-layer Gatekeeper ---
     async def record_peer_interaction(self, group_id: int, user_a: int, user_b: int, ttl_seconds: int = 180) -> None:
         """Track active peer-to-peer conversation pair inside a group."""
@@ -163,27 +200,84 @@ class StateStore:
 
 
 class MessageDebouncer:
-    """2-4s debounce window per (scene, group_id, sender_qq) to merge burst messages."""
+    """1.5-2.5s debounce window per (scene, group_id, sender_qq) to merge burst messages."""
 
-    def __init__(self, window_seconds: float = 2.5) -> None:
+    def __init__(self, window_seconds: float = 1.5, max_batch_size: int = 8) -> None:
         self.window_seconds = window_seconds
+        self.max_batch_size = max(1, max_batch_size)
         self._buffers: dict[str, list[Any]] = defaultdict(list)
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._in_flight: set[asyncio.Task[None]] = set()
+
+    async def _dispatch_batch(self, batch: list[Any], callback: Any) -> None:
+        if batch:
+            await callback(batch)
 
     async def push(self, key: str, item: Any, callback: Any) -> None:
         self._buffers[key].append(item)
-        existing = self._tasks.get(key)
+        existing = self._tasks.pop(key, None)
         if existing and not existing.done():
             existing.cancel()
+
+        if len(self._buffers[key]) >= self.max_batch_size:
+            batch = self._buffers.pop(key, [])
+            task = asyncio.create_task(self._dispatch_batch(batch, callback), name=f"debounce_flush_cap:{key}")
+            self._in_flight.add(task)
+            task.add_done_callback(self._in_flight.discard)
+            return
 
         async def _flush() -> None:
             try:
                 await asyncio.sleep(self.window_seconds)
                 batch = self._buffers.pop(key, [])
                 self._tasks.pop(key, None)
-                if batch:
-                    await callback(batch)
+                await self._dispatch_batch(batch, callback)
             except asyncio.CancelledError:
                 return
 
-        self._tasks[key] = asyncio.create_task(_flush())
+        task = asyncio.create_task(_flush(), name=f"debounce:{key}")
+        self._tasks[key] = task
+
+    async def flush_key_now(self, key: str, callback: Any) -> list[Any]:
+        """Cancel timer for key and immediately return/flush any buffered items."""
+        existing = self._tasks.pop(key, None)
+        if existing and not existing.done():
+            existing.cancel()
+        batch = self._buffers.pop(key, [])
+        if batch and callback is not None:
+            await callback(batch)
+        return batch
+
+    def remove_recalled_message(self, message_id: str) -> int:
+        """Drop a recalled message from pending debounce buffers before it flushes."""
+        if not message_id:
+            return 0
+        removed = 0
+        for key in list(self._buffers.keys()):
+            before = len(self._buffers[key])
+            self._buffers[key] = [
+                it for it in self._buffers[key]
+                if str(getattr(it, "message_id", it.get("message_id", "") if isinstance(it, dict) else "")) != message_id
+            ]
+            removed += before - len(self._buffers[key])
+            if not self._buffers[key]:
+                self._buffers.pop(key, None)
+                t = self._tasks.pop(key, None)
+                if t and not t.done():
+                    t.cancel()
+        return removed
+
+    async def drain(self, timeout: float = 3.0) -> None:
+        """Cancel waiting debounce timers and wait for in-flight flush callbacks during shutdown."""
+        for key, t in list(self._tasks.items()):
+            if not t.done():
+                t.cancel()
+        self._tasks.clear()
+        self._buffers.clear()
+        pending = [t for t in self._in_flight if not t.done()]
+        if pending:
+            _, still = await asyncio.wait(pending, timeout=max(0.1, timeout))
+            for t in still:
+                t.cancel()
+            if still:
+                await asyncio.gather(*still, return_exceptions=True)

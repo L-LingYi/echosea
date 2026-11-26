@@ -12,11 +12,14 @@ Key rules from Companion System v1.0 Spec:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Awaitable, Callable
 
 from app.core.redis_store import StateStore
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
+
+logger = logging.getLogger(__name__)
 
 # Patterns indicating third-person discussion ABOUT the bot rather than calling the bot directly
 THIRD_PERSON_CUES = (
@@ -88,6 +91,7 @@ class GatekeeperService:
         budget_fuse_active: bool = False,
         admin_qq: int = 0,
         llm_scorer: Callable[[MessageEnvelope, str], Awaitable[dict[str, Any] | None]] | None = None,
+        soft_entry_threshold: float | None = None,
     ) -> GatekeeperDecision:
         # 0. Instant recall interception
         if await self.store.is_recalled(envelope.message_id):
@@ -192,6 +196,7 @@ class GatekeeperService:
                 target="third_person_about_bot",
                 base_score=0.72,
                 llm_scorer=llm_scorer,
+                default_threshold=soft_entry_threshold,
             )
 
         # --- Layer 3: Active Peer-to-Peer Thread Guard & Air Guardrail ---
@@ -212,7 +217,7 @@ class GatekeeperService:
             if any(cue in text for cue in GOODBYE_CUES) or (envelope.reply_to_msg_id and not replied_to_bot):
                 await self.store.clear_user_attention(group_id, envelope.sender_qq)
             else:
-                eff_threshold = self.compute_attention_threshold(attention_age)
+                eff_threshold = self.compute_attention_threshold(attention_age, soft_entry_threshold=soft_entry_threshold)
                 # In hot window (<=60s) with no external gatekeeper LLM, allow smooth direct follow-up
                 base = 0.72 if attention_age <= self.attention_hot_seconds else 0.50
                 decision = await self._evaluate_soft_entry(
@@ -221,6 +226,7 @@ class GatekeeperService:
                     base_score=base,
                     llm_scorer=llm_scorer,
                     threshold_override=eff_threshold,
+                    default_threshold=soft_entry_threshold,
                     attention_age_seconds=attention_age,
                     in_attention_window=True,
                 )
@@ -235,7 +241,7 @@ class GatekeeperService:
             raw_group_age = await self.store.get_group_bot_activity_age_seconds(group_id)
             if raw_group_age is not None and raw_group_age <= self.group_topic_warmth_seconds:
                 group_warmth_age = raw_group_age
-                warmth_threshold = self.compute_group_warmth_threshold(raw_group_age)
+                warmth_threshold = self.compute_group_warmth_threshold(raw_group_age, soft_entry_threshold=soft_entry_threshold)
 
         # Open group message -> evaluate soft-entry with strict air-guardrail
         return await self._evaluate_soft_entry(
@@ -244,29 +250,40 @@ class GatekeeperService:
             base_score=0.35,
             llm_scorer=llm_scorer,
             threshold_override=warmth_threshold,
+            default_threshold=soft_entry_threshold,
             group_warmth_age_seconds=group_warmth_age,
         )
 
-    def compute_attention_threshold(self, age_seconds: float) -> float:
+    def compute_attention_threshold(
+        self,
+        age_seconds: float,
+        soft_entry_threshold: float | None = None,
+    ) -> float:
         """0..60s -> 0.35 (hot); 60..240s -> linear decay from 0.35 back to soft_entry_threshold (0.78)."""
+        base_thr = self.soft_entry_threshold if soft_entry_threshold is None else soft_entry_threshold
         hot_floor = 0.35
         if age_seconds <= self.attention_hot_seconds:
             return hot_floor
         if age_seconds >= self.attention_decay_seconds:
-            return self.soft_entry_threshold
+            return base_thr
         span = max(1.0, self.attention_decay_seconds - self.attention_hot_seconds)
         progress = (age_seconds - self.attention_hot_seconds) / span
-        return round(hot_floor + progress * (self.soft_entry_threshold - hot_floor), 3)
+        return round(hot_floor + progress * (base_thr - hot_floor), 3)
 
-    def compute_group_warmth_threshold(self, age_seconds: float) -> float:
+    def compute_group_warmth_threshold(
+        self,
+        age_seconds: float,
+        soft_entry_threshold: float | None = None,
+    ) -> float:
         """0..group_topic_warmth_seconds -> linear decay from warmth_floor (0.65) back to soft_entry_threshold (0.78)."""
+        base_thr = self.soft_entry_threshold if soft_entry_threshold is None else soft_entry_threshold
         if age_seconds <= 0.0:
             return self.group_topic_warmth_floor
         if age_seconds >= self.group_topic_warmth_seconds:
-            return self.soft_entry_threshold
+            return base_thr
         span = max(1.0, self.group_topic_warmth_seconds)
         progress = age_seconds / span
-        return round(self.group_topic_warmth_floor + progress * (self.soft_entry_threshold - self.group_topic_warmth_floor), 3)
+        return round(self.group_topic_warmth_floor + progress * (base_thr - self.group_topic_warmth_floor), 3)
 
     async def _evaluate_soft_entry(
         self,
@@ -275,6 +292,7 @@ class GatekeeperService:
         base_score: float,
         llm_scorer: Callable[[MessageEnvelope, str], Awaitable[dict[str, Any] | None]] | None = None,
         threshold_override: float | None = None,
+        default_threshold: float | None = None,
         attention_age_seconds: float | None = None,
         in_attention_window: bool = False,
         group_warmth_age_seconds: float | None = None,
@@ -315,10 +333,11 @@ class GatekeeperService:
                             reason=reason,
                             should_record_ambient=True,
                         )
-            except Exception:
-                pass  # Fall back cleanly to deterministic heuristic score
+            except Exception as exc:
+                logger.warning("Gatekeeper LLM scorer failed, using heuristic fallback [%s]: %s", type(exc).__name__, exc)
 
-        eff_thr = threshold_override if threshold_override is not None else self.soft_entry_threshold
+        base_thr = default_threshold if default_threshold is not None else self.soft_entry_threshold
+        eff_thr = threshold_override if threshold_override is not None else base_thr
         if in_attention_window and consecutive_turns >= self.max_consecutive_turns:
             # Progressive tightening instead of hard cutoff: filters weak filler while keeping clear follow-ups alive
             extra_turns = consecutive_turns - self.max_consecutive_turns + 1

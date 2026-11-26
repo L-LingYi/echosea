@@ -1,17 +1,20 @@
 """Cloud Admin Authentication API: Login with IP rate limit, JWT/HttpOnly cookie, TOTP 2FA."""
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_admin, get_db, get_runtime
+from app.api.deps import bearer_scheme, get_current_admin, get_db, get_runtime
 from app.models.db import AdminUser
 from app.models.schemas import LoginRequest, PasswordChangeRequest, TokenResponse
 from app.security import (
     create_access_token,
+    decode_access_token,
     decrypt_secret,
     encrypt_secret,
     generate_totp_secret,
@@ -24,6 +27,50 @@ from app.security import (
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+_TRUSTED_PROXY_NETS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _is_trusted_proxy(host: str | None) -> bool:
+    if not host:
+        return False
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(host.split("%")[0])
+        return ip_obj.is_loopback or any(ip_obj in net for net in _TRUSTED_PROXY_NETS)
+    except ValueError:
+        return False
+
+
+def _extract_client_ip(request: Request) -> str:
+    peer = request.client.host if request.client else "unknown"
+    if _is_trusted_proxy(peer):
+        real_ip = (request.headers.get("x-real-ip") or "").strip()
+        if real_ip:
+            return real_ip
+        forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return peer
+
+
+def _is_https_request(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    peer = request.client.host if request.client else ""
+    if _is_trusted_proxy(peer):
+        proto = (request.headers.get("x-forwarded-proto") or "").strip().lower()
+        return proto == "https"
+    return False
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     payload: LoginRequest,
@@ -32,9 +79,16 @@ async def login(
     session: AsyncSession = Depends(get_db),
     runtime=Depends(get_runtime),
 ):
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _extract_client_ip(request)
+    store = getattr(runtime, "state_store", None)
     limiter = runtime.login_rate_limiter
-    if limiter.is_blocked(client_ip):
+    if store is not None:
+        if await store.is_login_blocked(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Please retry in 5 minutes.",
+            )
+    elif limiter.is_blocked(client_ip):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed login attempts. Please retry in 5 minutes.",
@@ -43,34 +97,58 @@ async def login(
     stmt = select(AdminUser).where(AdminUser.username == payload.username, AdminUser.is_active.is_(True))
     user = (await session.execute(stmt)).scalar_one_or_none()
     if user is None or not verify_password(payload.password, user.password_hash):
-        limiter.record_failure(client_ip)
+        if store is not None:
+            await store.record_login_failure(client_ip)
+        else:
+            limiter.record_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
 
     if user.totp_enabled and user.totp_secret_enc:
         secret = decrypt_secret(user.totp_secret_enc, runtime.settings.master_encryption_key)
         if not verify_totp_code(secret, payload.totp_code or ""):
-            limiter.record_failure(client_ip)
+            if store is not None:
+                await store.record_login_failure(client_ip)
+            else:
+                limiter.record_failure(client_ip)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid 2FA TOTP code")
 
+    if store is not None:
+        await store.reset_login_failures(client_ip)
     limiter.reset(client_ip)
     user.last_login_at = datetime.now(timezone.utc)
     token = create_access_token(
         subject=user.username,
         secret_key=runtime.settings.jwt_secret_key,
         expires_minutes=runtime.settings.jwt_expire_minutes,
+        extra={"tv": int(getattr(user, "token_version", 1))},
     )
     response.set_cookie(
         key="companion_session",
         value=token,
         httponly=True,
         samesite="lax",
+        secure=_is_https_request(request),
         max_age=runtime.settings.jwt_expire_minutes * 60,
     )
     return TokenResponse(access_token=token, username=user.username, totp_enabled=user.totp_enabled)
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(
+    request: Request,
+    response: Response,
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    token = creds.credentials if creds else request.cookies.get("companion_session")
+    if token:
+        payload = decode_access_token(token, runtime.settings.jwt_secret_key)
+        if payload and payload.get("sub"):
+            stmt = select(AdminUser).where(AdminUser.username == payload["sub"], AdminUser.is_active.is_(True))
+            user = (await session.execute(stmt)).scalar_one_or_none()
+            if user is not None:
+                user.token_version = int(getattr(user, "token_version", 1)) + 1
     response.delete_cookie("companion_session")
     return {"ok": True}
 
@@ -87,11 +165,14 @@ async def me(admin: AdminUser = Depends(get_current_admin)):
 @router.post("/password")
 async def change_password(
     payload: PasswordChangeRequest,
+    response: Response,
     admin: AdminUser = Depends(get_current_admin),
 ):
     if not verify_password(payload.old_password, admin.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Old password is incorrect")
     admin.password_hash = hash_password(payload.new_password)
+    admin.token_version = int(getattr(admin, "token_version", 1)) + 1
+    response.delete_cookie("companion_session")
     return {"ok": True}
 
 
