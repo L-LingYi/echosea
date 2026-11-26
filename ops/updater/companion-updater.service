@@ -16,7 +16,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/opt/companion-system
+ReadWritePaths=/opt/companion-system /usr/local/libexec/companion-updater
 Restart=on-failure
 RestartSec=5
 

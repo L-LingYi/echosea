@@ -39,6 +39,7 @@ export const STATUS_LABELS = {
   running: '进行中',
   failed: '失败',
   rolled_back: '已回滚',
+  confirmation_required: '待二次确认',
   success: '成功',
   error: '失败',
 };

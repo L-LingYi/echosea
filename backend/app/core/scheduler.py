@@ -28,6 +28,7 @@ class CoreScheduler:
         reflection_service: Any,
         backup_service: Any,
         alert_service: Any | None = None,
+        update_service: Any | None = None,
         timezone_name: str = "Asia/Shanghai",
         schedule_interval_seconds: int = 900,
     ) -> None:
@@ -36,6 +37,7 @@ class CoreScheduler:
         self.reflection_service = reflection_service
         self.backup_service = backup_service
         self.alert_service = alert_service
+        self.update_service = update_service
         self.timezone_name = timezone_name
         self.schedule_interval_seconds = schedule_interval_seconds
 
@@ -110,6 +112,16 @@ class CoreScheduler:
                     executed.append("scheduled_backup")
             except Exception as exc:
                 logger.warning("CoreScheduler scheduled_backup failed [%s]: %s", type(exc).__name__, exc)
+
+        # 5. Tier 3 Unattended Safe Patch Auto-Update check (off-peak local hour, e.g. 04:00)
+        if self.update_service is not None:
+            try:
+                upd_res = await self.update_service.run_scheduled_auto_update(session, local_dt)
+                if upd_res and upd_res.get("action") in ("triggered", "notified"):
+                    state["last_auto_update_check_at"] = utc_now.isoformat()
+                    executed.append(f"auto_update:{upd_res['action']}")
+            except Exception as exc:
+                logger.warning("CoreScheduler auto_update failed [%s]: %s", type(exc).__name__, exc)
 
         if state != (cfg_row.config_json or {}):
             cfg_row.config_json = state

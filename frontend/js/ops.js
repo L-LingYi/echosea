@@ -1,6 +1,65 @@
 import { STATUS_LABELS, api, badge, el, formatLocalTime, labelOf, replaceChildren, toast } from './api.js';
 
 let LAST_CHECKED_REF = '';
+let LAST_INSPECTION = null;
+let UPD_TOTP_ENABLED = false;
+let PENDING_CONFIRM_CTX = null;
+
+export function closeUpdateConfirmModal() {
+  const modal = document.getElementById('updateConfirmModal');
+  if (modal) modal.classList.add('hidden');
+  const code = document.getElementById('updateConfirmCode');
+  if (code) code.value = '';
+  PENDING_CONFIRM_CTX = null;
+}
+
+function renderDiffBox(diffText) {
+  const box = document.getElementById('updateDiffBox');
+  if (!box) return;
+  const lines = String(diffText || '（无详细文本 Diff）').split('\n');
+  box.replaceChildren(
+    ...lines.map(line => {
+      let cls = 'diff-line-ctx';
+      if (line.startsWith('+') && !line.startsWith('+++')) cls = 'diff-line-add';
+      else if (line.startsWith('-') && !line.startsWith('---')) cls = 'diff-line-del';
+      else if (line.startsWith('@@') || line.startsWith('diff --git')) cls = 'diff-line-hunk';
+      return el('span', { className: cls }, line || ' ');
+    }),
+  );
+}
+
+export function openUpdateConfirmModal(ctx) {
+  PENDING_CONFIRM_CTX = ctx;
+  const meta = document.getElementById('updateConfirmMeta');
+  if (meta) {
+    const reasons = (ctx.reasons || []).join('；');
+    meta.textContent = `目标提交 ${(ctx.to_commit || '').slice(0, 12)}：${reasons || '包含受保护配置变更，请核对下方精确 Diff 后再放行。'}`;
+  }
+  replaceChildren(
+    'updateConfirmFiles',
+    (ctx.protected_files || []).map(f => badge(f, 'warn')),
+  );
+  renderDiffBox(ctx.diff || '');
+  const label = document.getElementById('updateConfirmLabel');
+  const input = document.getElementById('updateConfirmCode');
+  if (UPD_TOTP_ENABLED) {
+    if (label) label.textContent = '输入 6 位 TOTP 动态验证码（签发一次性更新令牌）';
+    if (input) {
+      input.type = 'text';
+      input.setAttribute('inputmode', 'numeric');
+      input.placeholder = '6 位动态码';
+    }
+  } else {
+    if (label) label.textContent = '当前尚未开启 TOTP，请输入管理员密码确认（签发一次性更新令牌）';
+    if (input) {
+      input.type = 'password';
+      input.removeAttribute('inputmode');
+      input.placeholder = '管理员登录密码';
+    }
+  }
+  const modal = document.getElementById('updateConfirmModal');
+  if (modal) modal.classList.remove('hidden');
+}
 
 export function toggleBackupFields() {
   const mode = document.getElementById('bkProvider').value;
@@ -94,6 +153,20 @@ export async function loadOps() {
   }
 
   const modeLabel = upd.mode === 'github_public' ? `GitHub (${upd.github_repo})` : '未配置 GitHub 仓库';
+  UPD_TOTP_ENABLED = Boolean(upd.totp_enabled);
+  const autoCfg = upd.auto_update || {};
+  const autoEl = document.getElementById('updAutoEnabled');
+  if (autoEl) autoEl.checked = Boolean(autoCfg.auto_update_enabled);
+  const hourEl = document.getElementById('updAutoHour');
+  if (hourEl && autoCfg.auto_update_hour !== undefined) hourEl.value = String(autoCfg.auto_update_hour);
+  const autoStatusEl = document.getElementById('updAutoStatus');
+  if (autoStatusEl) {
+    const hh = String(autoCfg.auto_update_hour ?? 4).padStart(2, '0');
+    const mm = String(autoCfg.auto_update_minute ?? 0).padStart(2, '0');
+    autoStatusEl.textContent = autoCfg.auto_update_enabled
+      ? `自动更新已开启（每日 ${hh}:${mm} 检查第一级补丁）${autoCfg.last_auto_update_message ? ' · 最近：' + autoCfg.last_auto_update_message : ''}`
+      : '定时自动更新未开启';
+  }
   replaceChildren(
     'updateStatusBox',
     el(
@@ -113,7 +186,25 @@ export async function loadOps() {
     replaceChildren(
       'updateJobTable',
       jobs.map(j => {
-        const cls = j.status === 'succeeded' ? 'ok' : ((j.status === 'running' || j.status === 'pending') ? 'info' : 'err');
+        const cls = j.status === 'succeeded'
+          ? 'ok'
+          : ((j.status === 'running' || j.status === 'pending') ? 'info' : (j.status === 'confirmation_required' ? 'warn' : 'err'));
+        const actionCell = j.confirmation
+          ? el(
+            'div',
+            { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;' },
+            el('span', {}, j.log_summary),
+            el(
+              'button',
+              {
+                className: 'btn sm secondary',
+                type: 'button',
+                onClick: () => openUpdateConfirmModal(j.confirmation),
+              },
+              '查看 Diff 并确认',
+            ),
+          )
+          : j.log_summary;
         return el(
           'tr',
           {},
@@ -121,7 +212,7 @@ export async function loadOps() {
           el('td', {}, `${fmtUpdMode(j.mode)} / ${j.target_ref}`),
           el('td', {}, el('code', {}, j.from_commit || j.from_version), ' → ', el('code', {}, j.to_commit || '-')),
           el('td', {}, badge(labelOf(STATUS_LABELS, j.status), cls)),
-          el('td', {}, j.log_summary),
+          el('td', {}, actionCell),
           el('td', {}, formatLocalTime(j.created_at)),
         );
       }),
@@ -133,6 +224,8 @@ export async function checkSystemUpdate() {
   const message = document.getElementById('updateCheckMessage');
   const trigger = document.getElementById('updateTrigger');
   LAST_CHECKED_REF = '';
+  LAST_INSPECTION = null;
+  replaceChildren('updateInspectBadge');
   trigger.disabled = true;
   message.textContent = '正在检查更新…';
   try {
@@ -140,6 +233,32 @@ export async function checkSystemUpdate() {
     if (result.update_available && result.updater_configured && !result.error) {
       LAST_CHECKED_REF = result.target_ref || '';
       trigger.disabled = !LAST_CHECKED_REF;
+      if (LAST_CHECKED_REF) {
+        try {
+          const insp = await api('/api/system/update/inspect', {
+            method: 'POST',
+            body: JSON.stringify({ target_ref: LAST_CHECKED_REF }),
+          });
+          LAST_INSPECTION = { ...insp, target_ref: LAST_CHECKED_REF };
+          if (insp.requires_confirmation) {
+            replaceChildren(
+              'updateInspectBadge',
+              badge('第二级：含受保护变更，需弹窗审查 Diff + 二次验证', 'warn'),
+              ' ',
+              ...(insp.protected_files || []).map(f => badge(f, 'purple')),
+            );
+          } else {
+            const note = (insp.safe_notes || []).join('；');
+            replaceChildren(
+              'updateInspectBadge',
+              badge('第一级：安全变更，可直接自动安装', 'ok'),
+              note ? el('span', { style: 'font-size:12px;color:var(--mute);margin-left:8px;' }, note) : null,
+            );
+          }
+        } catch {
+          // Non-fatal: trigger endpoint still enforces policy on host side
+        }
+      }
     }
     message.textContent = result.error || (result.update_available
       ? `发现新版本 ${result.latest_version} ${result.release_notes || ''}`
@@ -151,8 +270,14 @@ export async function checkSystemUpdate() {
 
 export async function triggerSystemUpdate() {
   const target = LAST_CHECKED_REF;
-  if (!target || !confirm('确认安装更新？Core 会短暂重启。')) return;
+  if (!target) return;
+  if (LAST_INSPECTION && LAST_INSPECTION.requires_confirmation) {
+    openUpdateConfirmModal(LAST_INSPECTION);
+    return;
+  }
+  if (!confirm('确认安装更新？Core 会短暂重启。')) return;
   LAST_CHECKED_REF = '';
+  LAST_INSPECTION = null;
   document.getElementById('updateTrigger').disabled = true;
   try {
     const result = await api('/api/system/update/trigger', { method: 'POST', body: JSON.stringify({ target_ref: target }) });
@@ -289,6 +414,62 @@ export function initOpsForms(onLogout) {
       toast('管理员密码已更新，请使用新密码重新登录');
       pwdForm.reset();
       onLogout();
+    });
+  }
+
+  const autoUpdForm = document.getElementById('autoUpdateForm');
+  if (autoUpdForm) {
+    autoUpdForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      await api('/api/system/update/auto-config', {
+        method: 'PUT',
+        body: JSON.stringify({
+          auto_update_enabled: document.getElementById('updAutoEnabled').checked,
+          auto_update_hour: parseInt(document.getElementById('updAutoHour').value || '4', 10),
+          auto_update_minute: 0,
+        }),
+      });
+      toast('无人值守自动更新策略已保存');
+      await loadOps();
+    });
+  }
+
+  const updConfirmForm = document.getElementById('updateConfirmForm');
+  if (updConfirmForm) {
+    updConfirmForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!PENDING_CONFIRM_CTX) return;
+      const ctx = PENDING_CONFIRM_CTX;
+      const secretInput = document.getElementById('updateConfirmCode').value.trim();
+      const payload = {
+        target_ref: ctx.target_ref,
+        to_commit: ctx.to_commit,
+        diff_sha256: ctx.diff_sha256,
+      };
+      if (UPD_TOTP_ENABLED) payload.totp_code = secretInput;
+      else payload.password = secretInput;
+      try {
+        const tok = await api('/api/system/update/confirm-token', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        const trig = await api('/api/system/update/trigger', {
+          method: 'POST',
+          body: JSON.stringify({
+            target_ref: ctx.target_ref,
+            confirm_token: tok.confirm_token,
+          }),
+        });
+        closeUpdateConfirmModal();
+        LAST_CHECKED_REF = '';
+        LAST_INSPECTION = null;
+        const trigBtn = document.getElementById('updateTrigger');
+        if (trigBtn) trigBtn.disabled = true;
+        toast(`已通过二次验证，更新任务 ${trig.job_uid} 已提交`);
+        await loadOps();
+      } catch (err) {
+        toast(err.message);
+      }
     });
   }
 }

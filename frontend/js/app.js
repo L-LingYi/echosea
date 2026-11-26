@@ -25,6 +25,7 @@ import { initPersonaForm, loadPersona, runSandbox, saveRuntimeConfig } from './p
 import { initHotSourceForm, loadPerception, refreshBriefing, syncSchedule } from './perception.js';
 import {
   checkSystemUpdate,
+  closeUpdateConfirmModal,
   exchangeAliyunCode,
   initOpsForms,
   loadOps,
@@ -120,6 +121,7 @@ const ACTION_MAP = {
   'trigger-backup': () => triggerBackup(),
   'check-update': () => checkSystemUpdate(),
   'trigger-update': () => triggerSystemUpdate(),
+  'close-update-confirm-modal': () => closeUpdateConfirmModal(),
   'test-backup-conn': () => testBackupConn(),
   'oauth-aliyun': () => openAliyunOAuth(),
   'exchange-aliyun-code': () => exchangeAliyunCode(),
@@ -181,6 +183,13 @@ function bindUI() {
   if (idModal) {
     idModal.addEventListener('click', e => {
       if (e.target === idModal) closeIdentityModal();
+    });
+  }
+
+  const updModal = document.getElementById('updateConfirmModal');
+  if (updModal) {
+    updModal.addEventListener('click', e => {
+      if (e.target === updModal) closeUpdateConfirmModal();
     });
   }
 

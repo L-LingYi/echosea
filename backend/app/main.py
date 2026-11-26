@@ -253,6 +253,7 @@ def create_app(
             reflection_service=reflection_service,
             backup_service=backup_service,
             alert_service=alert_service,
+            update_service=update_service,
             timezone_name=settings.app_timezone,
         )
         app.state.core_scheduler = core_scheduler

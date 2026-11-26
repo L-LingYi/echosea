@@ -1,5 +1,13 @@
 # 更新日志（Changelog）
 
+## v1.8.1 (2026-11-26)
+- **在线更新检查与三级自动化更新体系**：
+  - 修复 `UpdateService.check_for_updates()` 在 GitHub Release 接口返回 404 回退至 `main` 分支提交时调用未定义 `logger` 导致后台返回 HTTP 500 的缺陷，并补充当容器未注入 `APP_GIT_COMMIT` 时自动向宿主机代理 `/check` 查询当前提交的兜底。
+  - **第一级（自动放行）**：在 `ops/updater/host_updater.py` 内置零依赖标准库 Compose YAML 解析器与语义 Diff 判定；当 `docker-compose.yml` 仅调整 `companion-core` 的 `environment`（如 `TZ`）、`mem_limit`、`logging`、`healthcheck`、`restart` 等安全字段且未修改挂载卷、端口、网络、`privileged` 或 `postgres`/`redis` 等其他服务时直接自动放行更新。
+  - **第二级（WebUI 看 Diff + TOTP 二次确认放行）**：新增宿主机 `POST /inspect` 与后台 `/api/system/update/inspect`、`/api/system/update/confirm-token` 接口及 WebUI Diff 审查弹窗；修改 `Dockerfile`、受保护 Compose 字段或更新器脚本时返回精确 `git diff` 并绑定 `(to_commit, diff_sha256)` 签发 5 分钟一次性 HMAC 确认令牌（已开启 TOTP 时校验 6 位动态码，未开启时校验管理员密码）。
+  - **第三级（凌晨无人值守定时补丁更新）**：在 `CoreScheduler` 与 WebUI 新增可开关的定时自动更新策略（默认关闭、可配置凌晨执行时段如 `04:00`），严格仅对第一级安全变更且同小版本补丁（如 `v1.8.x`）自动拉取更新；涉及第二级受保护变更或跨版本升级时自动去重推送告警/QQ 通知等待人工确认。
+  - **更新器自身受控升级**：检测到 `ops/updater/host_updater.py` 变更时先备份旧脚本并使用 `python3 -m py_compile` 校验语法，待 Core 健康检查通过后原子覆盖并通过 `systemd`（`Restart=on-failure` + `ReadWritePaths`）平滑重启生效。
+
 ## v1.8.0 (2026-11-26)
 - **2GB 生产服务器资源调优与运维安全**：
   - `docker-compose.yml` 新增内存上限（`postgres: 512m`、`companion-core: 448m`、`searxng: 192m`、`redis: 64m`、`caddy: 64m`、`pg-backup: 128m`）、PostgreSQL 参数调优（`shared_buffers=128MB`、`work_mem=4MB`、`max_connections=40`）、Redis `--maxmemory 48mb --maxmemory-policy allkeys-lru`，及全容器 `json-file` 日志轮转（`max-size=10m`, `max-file=3`）。注：若通过在线更新部署，受宿主机保护机制限制（`Dockerfile`、`docker-compose.yml` 为受保护文件），需手动在宿主机同步 Compose 并重建容器。

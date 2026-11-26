@@ -73,7 +73,8 @@ curl -fsS http://127.0.0.1:8000/healthz
    - 宿主更新器仅从配置指定的 Git 来源执行快进（Fast-Forward），并校验正在运行的 Core 提交版本。
    - 升级前自动备份 PostgreSQL（保存在 `/var/lib/companion-updater`）并保留旧版 Core 镜像。
    - 若新版本未通过 `/healthz` 或提交校验失败，更新器将自动回退至上一提交与旧镜像。
-   - `docker-compose.yml`、`Dockerfile` 及更新器自身的变更，建议由运维在宿主机人工审核后部署或重新运行 `install_updater.sh`。
+   - `docker-compose.yml` 仅调整 `companion-core` 环境变量、内存限制与日志轮转等安全字段时可直接自动放行；涉及 `Dockerfile`、挂载卷/端口/网络或其他服务、以及 `ops/updater/` 更新器脚本的变更，可在 WebUI 弹窗查看精确 `git diff` 并通过 TOTP 动态码（或管理员密码）签发一次性确认令牌后在宿主机执行重建。
+   - 若升级了 `companion-updater.service` 权限，建议首次执行一次 `sudo ./ops/updater/install_updater.sh "$PWD"` 以允许更新器后续自动热替换 `/usr/local/libexec/companion-updater/host_updater.py` 并平滑重启。
 
 ---
 
