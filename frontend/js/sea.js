@@ -1055,7 +1055,7 @@ function updateHoverCard(node, proj, stageW, stageH) {
   left = Math.max(12, Math.min(Math.max(12, rightSafe - cw), left));
   top = Math.max(12, Math.min(stageH - ch - 12, top));
   card.style.transform = `translate3d(${left.toFixed(1)}px, ${top.toFixed(1)}px, 0)`;
-  card.style.zIndex = '2300';
+  card.style.zIndex = '25';
 }
 
 function renderInspector(node) {

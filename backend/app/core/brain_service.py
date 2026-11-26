@@ -952,6 +952,8 @@ class CompanionPipeline:
             if ident is not None:
                 cards = ident.group_cards if isinstance(ident.group_cards, dict) else {}
                 group_name = cards.get(str(envelope.group_id)) if envelope.group_id else None
+                if not group_name and cards:
+                    group_name = next((str(v).strip() for v in cards.values() if str(v).strip()), None)
                 disp = str(group_name or ident.nickname or "").strip()
                 brief = format_acquaintance_brief(
                     {
