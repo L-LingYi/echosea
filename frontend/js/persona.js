@@ -52,8 +52,21 @@ export async function runSandbox() {
   );
 }
 
+export async function reviewSuggestion(id, action) {
+  const res = await api(`/api/persona/suggestions/${id}/review`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+  toast(action === 'approve' ? `已审批通过 (${res.status})` : '已忽略/停用');
+  loadPersona();
+}
+
 export async function loadPersona() {
-  const [list, cfgs] = await Promise.all([api('/api/persona/versions'), api('/api/persona/configs')]);
+  const [list, cfgs, suggestions] = await Promise.all([
+    api('/api/persona/versions'),
+    api('/api/persona/configs'),
+    api('/api/persona/suggestions').catch(() => []),
+  ]);
   replaceChildren(
     'personaList',
     list.map(p => el(
@@ -74,6 +87,52 @@ export async function loadPersona() {
   document.getElementById('cfgSavedList').textContent = cfgs.length
     ? `已保存配置：${cfgs.map(c => `${c.scope_type}:${c.scope_id}`).join(' / ')}`
     : '当前使用默认参数';
+
+  if (!suggestions.length) {
+    replaceChildren('suggestionList', el('div', { className: 'empty-state' }, '暂无待审演进建议或纠偏提示'));
+  } else {
+    const typeMap = {
+      few_shot: '高赞 Few-Shot',
+      banned_phrase: '待审口癖词',
+      persona_advice: '性格建议（仅参考）',
+      correction_hint: '48h 自纠偏提示',
+    };
+    replaceChildren(
+      'suggestionList',
+      suggestions.map(s => {
+        const c = s.content_json || {};
+        const detailText = s.suggestion_type === 'few_shot'
+          ? `问：${c.user || ''} → 答：${c.assistant || ''}`
+          : (c.phrase || c.advice || c.hint || '');
+        const stCls = s.status === 'approved' || s.status === 'active' ? 'ok' : (s.status === 'pending' ? 'warn' : 'info');
+        return el(
+          'div',
+          { style: 'padding:10px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;gap:10px;align-items:flex-start;' },
+          el(
+            'div',
+            { style: 'flex:1;min-width:0;' },
+            el('div', { style: 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;' },
+              badge(typeMap[s.suggestion_type] || s.suggestion_type, 'purple'),
+              badge(labelOf(STATUS_LABELS, s.status), stCls),
+              el('strong', {}, s.title || '-'),
+            ),
+            detailText ? el('div', { style: 'font-size:13px;color:var(--ink2);margin-bottom:2px;' }, detailText) : null,
+            s.reason ? el('div', { style: 'font-size:12px;color:var(--mute);' }, s.reason) : null,
+          ),
+          (s.status === 'pending' || s.status === 'active')
+            ? el(
+              'div',
+              { className: 'row-actions' },
+              s.status === 'pending'
+                ? el('button', { className: 'btn sm', type: 'button', onClick: () => reviewSuggestion(Number(s.id), 'approve') }, '通过')
+                : null,
+              el('button', { className: 'btn sm secondary', type: 'button', onClick: () => reviewSuggestion(Number(s.id), 'reject') }, s.status === 'active' ? '关闭' : '忽略'),
+            )
+            : null,
+        );
+      }),
+    );
+  }
 }
 
 export function initPersonaForm() {

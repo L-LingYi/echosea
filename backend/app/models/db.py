@@ -110,6 +110,9 @@ class MemoryEpisode(Base):
     is_anniversary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     embedding_json: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    recall_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_recalled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
@@ -203,6 +206,10 @@ class OutboxDelivery(Base):
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     onebot_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)
     onebot_echo: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    feedback_status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)  # pending | engaged | cold_drop | rejected | none
+    feedback_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    gatekeeper_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    trigger_msg_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -394,3 +401,24 @@ class UpdateJob(Base):
     log_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class EvolutionSuggestion(Base):
+    """Controlled self-evolution queue: pending Few-Shots, banned phrases, persona advice, and 48h correction hints."""
+
+    __tablename__ = "evolution_suggestions"
+    __table_args__ = (
+        Index("ix_evolution_suggestions_type_status", "suggestion_type", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    suggestion_type: Mapped[str] = mapped_column(String(32), nullable=False)  # few_shot | banned_phrase | persona_advice | correction_hint
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False)  # pending | approved | rejected | active | expired
+    group_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    source_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    content_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

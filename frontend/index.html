@@ -252,6 +252,14 @@
           <span id="cfgSavedList" style="font-size:12px;color:var(--mute);"></span>
         </div>
       </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h3 style="margin:0;">🧬 自我演进待审队列（Few-Shot / 口癖词 / 性格建议 / 48h 自纠偏）</h3>
+          <button class="btn sm secondary" data-action="load-persona">↻ 刷新队列</button>
+        </div>
+        <div style="font-size:12px;color:var(--mute);margin-bottom:10px;">核心红线：系统绝不自动覆盖 System Prompt，核心性格建议与高赞回复需由管理员人工审批。</div>
+        <div id="suggestionList">加载中...</div>
+      </div>
     </section>
 
     <!-- 7. Perception & Schedule -->
@@ -468,6 +476,46 @@
         <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
           <button class="btn sm secondary" type="button" data-action="close-provider-modal">取消</button>
           <button class="btn sm" type="submit">保存并热生效</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 4D Identity Profile Modal Editor -->
+<div id="identityModal" class="modal-mask hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="identityFormTitle">编辑成员四维画像</h3>
+      <button class="btn sm secondary" type="button" data-action="close-identity-modal">✕</button>
+    </div>
+    <form id="identityForm" class="grid-2" style="margin-bottom:0;">
+      <div>
+        <input id="idEditQq" type="hidden" value="" />
+        <label>昵称</label><input id="idNickname" placeholder="昵称" />
+        <label>熟悉度分数（&lt;10 初识 / 10-34 熟脸 / ≥35 老熟人）</label><input id="idRelLevel" type="number" min="0" value="0" />
+        <h4 style="margin:12px 0 6px;font-size:13px;">🌐 公开画像（群聊可读）</h4>
+        <label>习惯称呼</label><input id="idPubAddr" placeholder="如 阿明" />
+        <label>互动风格</label><input id="idPubStyle" placeholder="爱互损 / 偏好正经聊 / 惜字如金" />
+        <label>明确雷区（逗号分隔）</label><input id="idPubBound" placeholder="如 不聊加班" />
+        <label>稳定兴趣（逗号分隔）</label><input id="idPubInterests" placeholder="原神, 烧烤" />
+        <label>擅长领域（逗号分隔）</label><input id="idPubExpertise" placeholder="后端开发, Python" />
+        <label>作息习惯（逗号分隔）</label><input id="idPubSchedule" placeholder="夜猫子" />
+        <label>近期状态（7-14天有效，逗号分隔）</label><input id="idPubStates" placeholder="这周赶项目" />
+      </div>
+      <div>
+        <h4 style="margin:0 0 6px;font-size:13px;">🔒 私聊半隔离画像（仅私聊可读）</h4>
+        <label>私聊习惯称呼</label><input id="idPrivAddr" placeholder="私下称呼" />
+        <label>私聊互动风格</label><input id="idPrivStyle" placeholder="偏好正经聊" />
+        <label>私聊雷区（逗号分隔）</label><input id="idPrivBound" placeholder="敏感话题" />
+        <label>私聊兴趣（逗号分隔）</label><input id="idPrivInterests" placeholder="摄影" />
+        <label>私聊擅长（逗号分隔）</label><input id="idPrivExpertise" placeholder="剪辑" />
+        <label>私聊作息（逗号分隔）</label><input id="idPrivSchedule" placeholder="早起党" />
+        <label>私聊近期状态（7-14天有效，逗号分隔）</label><input id="idPrivStates" placeholder="最近在备考" />
+        <label>待二次印证线索（逗号分隔，清空即删除误抓线索）</label><input id="idPubCandidates" placeholder="待印证特征" />
+        <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn sm secondary" type="button" data-action="close-identity-modal">取消</button>
+          <button class="btn sm" type="submit">保存纠错</button>
         </div>
       </div>
     </form>

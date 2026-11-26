@@ -146,6 +146,22 @@ async def test_nightly_reflection_and_circadian_schedule(db_session):
     assert summary["episodes_created"] == 1
 
     ident = await db_session.get(QQIdentity, 30001)
+    # Single mention enters candidate_clues first (anti-joke confirmation)
+    cand_vals = {c["value"] for c in ident.public_profile["candidate_clues"]}
+    assert "原神" in cand_vals and "健身" in cand_vals
+
+    # Second mention confirms & promotes to stable_traits / interests
+    confirm_env = MessageEnvelope(
+        message_id="ref_confirm",
+        scene="group",
+        group_id=5001,
+        sender_qq=30001,
+        raw_text="周末继续原神和健身打卡",
+        self_qq=888,
+    )
+    await mem_svc.record_message(db_session, confirm_env, GatekeeperDecision(action="silent", target="group_open", score=0.2, reason="amb"))
+    await refl.run_nightly_reflection(db_session, group_id=5001)
+    await db_session.refresh(ident)
     assert "原神" in ident.public_profile["interests"]
     assert "健身" in ident.public_profile["interests"]
 

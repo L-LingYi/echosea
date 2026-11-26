@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.profile_schema import normalize_profile, relationship_tier
 from app.models.db import (
     AmbientSummary,
     ChatMessage,
@@ -153,6 +154,7 @@ class MemoryService:
         query_embedding: list[float] | None,
         pg_fts_ranks: dict[int, float] | None,
         limit: int,
+        pg_vec_sims: dict[int, float] | None = None,
     ) -> list[MemoryEpisode]:
         """Reciprocal Rank Fusion (RRF) across lexical match, vector similarity, importance, and recency."""
         if not candidates:
@@ -166,12 +168,14 @@ class MemoryService:
             overlap = (len(q_tokens & doc_tokens) / max(1, len(q_tokens))) if q_tokens else 0.0
             pg_bonus = (pg_fts_ranks or {}).get(ep.id, 0.0)
             lex = overlap + pg_bonus
-            vec = self._cosine_similarity(query_embedding, ep.embedding_json) if query_embedding else 0.0
+            vec = (pg_vec_sims or {}).get(ep.id, 0.0)
+            if vec <= 0.0 and query_embedding:
+                vec = self._cosine_similarity(query_embedding, ep.embedding_json)
             imp = float(ep.importance or 0.5)
-            created = ep.created_at
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            age_days = max(0.0, (now_utc - created).total_seconds() / 86400.0)
+            ref_dt = ep.last_recalled_at or ep.created_at
+            if ref_dt.tzinfo is None:
+                ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+            age_days = max(0.0, (now_utc - ref_dt).total_seconds() / 86400.0)
             recency = math.exp(-age_days / 30.0)
             scored.append((idx, lex, vec, imp, recency))
 
@@ -184,7 +188,7 @@ class MemoryService:
             rrf[idx] += 2.2 / (k + rank)
 
         # Vector similarity rank (only contributes when positive similarity)
-        if query_embedding:
+        if query_embedding or pg_vec_sims:
             vec_hits = [s for s in scored if s[2] > 0.0]
             for rank, (idx, *_) in enumerate(sorted(vec_hits, key=lambda x: x[2], reverse=True), start=1):
                 rrf[idx] += 2.0 / (k + rank)
@@ -197,6 +201,51 @@ class MemoryService:
 
         ranked_indices = sorted(range(len(candidates)), key=lambda i: rrf[i], reverse=True)
         return [candidates[i] for i in ranked_indices[:limit]]
+
+    async def reinforce_episodes(self, session: AsyncSession, episode_ids: list[int]) -> int:
+        """Strengthen recalled L3 episodes when they contribute to positive social engagement."""
+        unique_ids = [int(eid) for eid in dict.fromkeys(episode_ids or []) if eid]
+        if not unique_ids:
+            return 0
+        now_utc = datetime.now(timezone.utc)
+        rows = list((await session.execute(select(MemoryEpisode).where(MemoryEpisode.id.in_(unique_ids)))).scalars().all())
+        for ep in rows:
+            ep.recall_count = int(ep.recall_count or 0) + 1
+            ep.last_recalled_at = now_utc
+            ep.importance = min(1.0, round(float(ep.importance or 0.5) + 0.03, 4))
+            ep.is_archived = False
+        await session.flush()
+        return len(rows)
+
+    async def metabolize_episodes(
+        self,
+        session: AsyncSession,
+        archive_after_days: int = 30,
+        now_utc: datetime | None = None,
+    ) -> dict[str, int]:
+        """Decay unhit non-anniversary L3 episodes older than 30 days and archive low-importance ones (never delete)."""
+        now = now_utc or datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=max(1, archive_after_days))
+        stmt = select(MemoryEpisode).where(
+            MemoryEpisode.is_anniversary.is_(False),
+            MemoryEpisode.is_archived.is_(False),
+        )
+        rows = list((await session.execute(stmt)).scalars().all())
+        decayed = 0
+        archived = 0
+        for ep in rows:
+            ref_dt = ep.last_recalled_at or ep.created_at
+            if ref_dt.tzinfo is None:
+                ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+            if ref_dt > cutoff:
+                continue
+            ep.importance = max(0.05, round(float(ep.importance or 0.5) * 0.75, 4))
+            decayed += 1
+            if ep.importance <= 0.35 or (int(ep.recall_count or 0) == 0 and ep.importance <= 0.50):
+                ep.is_archived = True
+                archived += 1
+        await session.flush()
+        return {"decayed": decayed, "archived": archived}
 
     async def assemble_context(
         self,
@@ -268,17 +317,21 @@ class MemoryService:
             )
             ambient_summaries = [s.summary_text for s in (await session.execute(amb_stmt)).scalars().all()]
 
-        # L3 Episodic Memory (SQL-enforced semi-isolation + optional Hybrid FTS/Vector/RRF recall!)
+        # L3 Episodic Memory (SQL-enforced semi-isolation + optional Hybrid FTS/Vector/RRF recall, excludes archived!)
         ep_limit = 8 if scene == "group" else 10
         iso_filter = (
             and_(
+                MemoryEpisode.is_archived.is_(False),
                 MemoryEpisode.scope == "public_group",
                 or_(MemoryEpisode.group_id == group_id, MemoryEpisode.qq_id == sender_qq),
             )
             if scene == "group"
-            else or_(
-                and_(MemoryEpisode.scope == "private_dm", MemoryEpisode.qq_id == sender_qq),
-                and_(MemoryEpisode.scope == "public_group", MemoryEpisode.qq_id == sender_qq),
+            else and_(
+                MemoryEpisode.is_archived.is_(False),
+                or_(
+                    and_(MemoryEpisode.scope == "private_dm", MemoryEpisode.qq_id == sender_qq),
+                    and_(MemoryEpisode.scope == "public_group", MemoryEpisode.qq_id == sender_qq),
+                ),
             )
         )
         clean_query = (query_text or "").strip()
@@ -294,6 +347,7 @@ class MemoryService:
             )
             candidates = list((await session.execute(cand_stmt)).scalars().all())
             pg_fts_ranks: dict[int, float] = {}
+            pg_vec_sims: dict[int, float] = {}
             bind = session.get_bind() if hasattr(session, "get_bind") else None
             dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
             if dialect_name == "postgresql" and clean_query and candidates:
@@ -306,8 +360,22 @@ class MemoryService:
                         pg_fts_ranks[int(eid)] = float(rnk or 0.0)
                 except Exception:
                     pg_fts_ranks = {}
+            if dialect_name == "postgresql" and query_embedding and candidates:
+                try:
+                    vec_literal = "[" + ",".join(f"{float(v):.6f}" for v in query_embedding) + "]"
+                    vec_sql = select(
+                        MemoryEpisode.id,
+                        text("1.0 - (embedding <=> CAST(:qv AS vector)) AS vec_sim").bindparams(qv=vec_literal),
+                    ).where(iso_filter, text("embedding IS NOT NULL"))
+                    for eid, sim in (await session.execute(vec_sql)).all():
+                        if sim is not None:
+                            pg_vec_sims[int(eid)] = float(sim)
+                except Exception:
+                    pg_vec_sims = {}
             candidate_count = len(candidates)
-            episodes = self._hybrid_rank_episodes(candidates, clean_query, query_embedding, pg_fts_ranks, ep_limit)
+            episodes = self._hybrid_rank_episodes(
+                candidates, clean_query, query_embedding, pg_fts_ranks, ep_limit, pg_vec_sims=pg_vec_sims
+            )
         else:
             ep_stmt = (
                 select(MemoryEpisode)
@@ -322,11 +390,14 @@ class MemoryService:
         identity = await session.get(QQIdentity, sender_qq)
         acquaintance_card: dict[str, Any] = {}
         if identity is not None:
+            tier_key, tier_label = relationship_tier(identity.relationship_level)
             acquaintance_card = {
                 "qq_id": identity.qq_id,
                 "nickname": identity.nickname,
                 "known_names": identity.known_names,
                 "relationship_level": identity.relationship_level,
+                "relationship_tier": tier_key,
+                "relationship_tier_label": tier_label,
                 "public_profile": identity.public_profile,
             }
             if scene == "private":
@@ -378,6 +449,7 @@ class MemoryService:
             "l2_ambient_summaries": ambient_summaries,
             "l3_episodes": [
                 {
+                    "id": ep.id,
                     "scope": ep.scope,
                     "title": ep.title,
                     "content": ep.content,
@@ -392,6 +464,7 @@ class MemoryService:
                 "mode": recall_mode,
                 "candidate_count": candidate_count,
                 "recalled_count": len(episodes),
+                "recalled_episode_ids": [ep.id for ep in episodes if ep.id is not None],
             },
         }
 

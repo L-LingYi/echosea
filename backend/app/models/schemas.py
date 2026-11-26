@@ -118,9 +118,14 @@ class ConfigUpsert(BaseModel):
 
 # --- Memory & Identity ---
 class IdentityUpdate(BaseModel):
+    nickname: str | None = None
     relationship_level: int | None = None
     public_profile: dict[str, Any] | None = None
     private_profile: dict[str, Any] | None = None
+
+
+class SuggestionReviewRequest(BaseModel):
+    action: Literal["approve", "reject"]
 
 
 class ForgetRequest(BaseModel):

@@ -1,10 +1,10 @@
 """Prompt Cache optimized message builder and Anti-AI-Flavor reply formatters."""
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
+from app.core.profile_schema import format_acquaintance_brief
 from app.core.tts_service import detect_voice_intent
 from app.models.db import PersonaVersion
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
@@ -94,6 +94,7 @@ def build_prompt_messages(
     enable_webpage_fetch: bool = True,
     image_blocks: list[dict[str, Any]] | None = None,
     vision_hints: list[str] | None = None,
+    correction_hints: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Prompt Cache optimized layout:
     1. Static prefix (system prompt + identity + banned phrases + search tool policy) FIRST
@@ -142,11 +143,14 @@ def build_prompt_messages(
     if semi_static_parts:
         messages.append({"role": "system", "content": "\n\n".join(semi_static_parts)})
 
+    speaker_brief = format_acquaintance_brief(memory_ctx.get("l4_acquaintance"), envelope.scene, max_chars=100)
     dynamic_parts = [
         f"[当前场景] {'群聊' if envelope.scene == 'group' else '私聊'}",
         f"[当前自身状态] 精力:{memory_ctx['l5_self_state']['energy_level']} 心情:{memory_ctx['l5_self_state']['mood']} 正在:{memory_ctx['l5_self_state']['current_activity']}",
-        f"[当前发言人画像] {json.dumps(memory_ctx['l4_acquaintance'], ensure_ascii=False)}",
+        f"[当前发言人画像] {speaker_brief}（仅作分寸参考，自然聊，严禁查户口式复述画像标签）",
     ]
+    if correction_hints:
+        dynamic_parts.append("[近期表达自纠偏提醒]\n" + "\n".join(f"- {h}" for h in correction_hints[:3]))
     if vision_hints:
         dynamic_parts.append("[图片画面记忆参考]\n" + "\n".join(f"- {h}" for h in vision_hints))
     if fast_search_text:

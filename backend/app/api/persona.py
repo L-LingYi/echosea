@@ -1,15 +1,17 @@
 """Persona Versioning, 3-Layer Config Inheritance, and Group Chat Replay Sandbox API."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_admin, get_db, get_runtime
 from app.core.gatekeeper import GatekeeperService
 from app.core.redis_store import StateStore
-from app.models.db import PersonaVersion, SystemConfig
-from app.models.schemas import ConfigUpsert, MessageEnvelope, PersonaCreate, SandboxReplayRequest
+from app.models.db import EvolutionSuggestion, PersonaVersion, SystemConfig
+from app.models.schemas import ConfigUpsert, MessageEnvelope, PersonaCreate, SandboxReplayRequest, SuggestionReviewRequest
 
 router = APIRouter(prefix="/api/persona", tags=["persona_and_config"])
 
@@ -236,3 +238,83 @@ async def sandbox_benchmark(
         "voice_mismatches": voice_mismatches,
         "details": details,
     }
+
+
+@router.get("/suggestions")
+async def list_evolution_suggestions(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+):
+    """List pending Few-Shot candidates, banned phrases, core persona advices, and active 48h correction hints."""
+    stmt = select(EvolutionSuggestion).order_by(EvolutionSuggestion.created_at.desc()).limit(limit)
+    if status:
+        stmt = stmt.where(EvolutionSuggestion.status == status)
+    rows = list((await session.execute(stmt)).scalars().all())
+    return [
+        {
+            "id": r.id,
+            "suggestion_type": r.suggestion_type,
+            "status": r.status,
+            "group_id": r.group_id,
+            "source_request_id": r.source_request_id,
+            "title": r.title,
+            "content_json": r.content_json,
+            "reason": r.reason,
+            "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+            "created_at": r.created_at.isoformat(),
+            "reviewed_at": r.reviewed_at.isoformat() if r.reviewed_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/suggestions/{suggestion_id}/review")
+async def review_evolution_suggestion(
+    suggestion_id: int,
+    payload: SuggestionReviewRequest,
+    _admin=Depends(get_current_admin),
+    session: AsyncSession = Depends(get_db),
+    runtime=Depends(get_runtime),
+):
+    """Approve or reject a controlled evolution suggestion (never auto-rewrites system_prompt)."""
+    sug = await session.get(EvolutionSuggestion, suggestion_id)
+    if sug is None:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+
+    now_utc = datetime.now(timezone.utc)
+    sug.reviewed_at = now_utc
+
+    if payload.action == "reject":
+        sug.status = "expired" if sug.suggestion_type == "correction_hint" else "rejected"
+        await session.flush()
+        return {"ok": True, "id": sug.id, "status": sug.status}
+
+    persona = await runtime.pipeline.get_active_persona(session)
+    content = sug.content_json or {}
+    if sug.suggestion_type == "few_shot":
+        user_txt = str(content.get("user") or "").strip()
+        asst_txt = str(content.get("assistant") or "").strip()
+        if user_txt and asst_txt:
+            examples = list(persona.few_shot_examples or [])
+            if not any(ex.get("user") == user_txt and ex.get("assistant") == asst_txt for ex in examples):
+                examples.append({"user": user_txt, "assistant": asst_txt})
+                persona.few_shot_examples = examples[-12:]
+        sug.status = "approved"
+    elif sug.suggestion_type == "banned_phrase":
+        phrase = str(content.get("phrase") or "").strip()
+        if phrase:
+            banned = list(persona.banned_phrases or [])
+            if phrase not in banned:
+                banned.append(phrase)
+                persona.banned_phrases = banned
+        sug.status = "approved"
+    elif sug.suggestion_type == "persona_advice":
+        # Marked approved for admin tracking; core system_prompt is only updated via explicit PersonaVersion creation
+        sug.status = "approved"
+    else:
+        sug.status = "active"
+
+    await session.flush()
+    return {"ok": True, "id": sug.id, "status": sug.status, "suggestion_type": sug.suggestion_type}

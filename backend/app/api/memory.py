@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_admin, get_db, get_runtime
+from app.core.profile_schema import normalize_profile, relationship_tier
 from app.models.db import AmbientSummary, GroupExpression, MemoryEpisode, QQIdentity, SelfLifeState
 from app.models.schemas import ExpressionReviewRequest, ForgetRequest, IdentityUpdate
 
@@ -20,19 +21,24 @@ async def list_identities(
     runtime=Depends(get_runtime),
 ):
     items = await runtime.identity_service.list_identities(session, limit=limit)
-    return [
-        {
-            "qq_id": i.qq_id,
-            "nickname": i.nickname,
-            "group_cards": i.group_cards,
-            "known_names": i.known_names,
-            "relationship_level": i.relationship_level,
-            "public_profile": i.public_profile,
-            "private_profile": i.private_profile,
-            "last_seen_at": i.last_seen_at.isoformat(),
-        }
-        for i in items
-    ]
+    result = []
+    for i in items:
+        tier_key, tier_label = relationship_tier(i.relationship_level)
+        result.append(
+            {
+                "qq_id": i.qq_id,
+                "nickname": i.nickname,
+                "group_cards": i.group_cards,
+                "known_names": i.known_names,
+                "relationship_level": i.relationship_level,
+                "relationship_tier": tier_key,
+                "relationship_tier_label": tier_label,
+                "public_profile": normalize_profile(i.public_profile, relationship_level=i.relationship_level),
+                "private_profile": normalize_profile(i.private_profile, relationship_level=i.relationship_level),
+                "last_seen_at": i.last_seen_at.isoformat(),
+            }
+        )
+    return result
 
 
 @router.patch("/identities/{qq_id}")
@@ -45,13 +51,29 @@ async def update_identity(
     identity = await session.get(QQIdentity, qq_id)
     if identity is None:
         raise HTTPException(status_code=404, detail="QQ identity not found")
+    if payload.nickname is not None:
+        identity.nickname = payload.nickname.strip()[:128]
     if payload.relationship_level is not None:
-        identity.relationship_level = payload.relationship_level
+        identity.relationship_level = max(0, int(payload.relationship_level))
     if payload.public_profile is not None:
-        identity.public_profile = payload.public_profile
+        identity.public_profile = normalize_profile(
+            payload.public_profile, relationship_level=identity.relationship_level
+        )
     if payload.private_profile is not None:
-        identity.private_profile = payload.private_profile
-    return {"ok": True, "qq_id": qq_id}
+        identity.private_profile = normalize_profile(
+            payload.private_profile, relationship_level=identity.relationship_level
+        )
+    await session.flush()
+    tier_key, tier_label = relationship_tier(identity.relationship_level)
+    return {
+        "ok": True,
+        "qq_id": qq_id,
+        "relationship_level": identity.relationship_level,
+        "relationship_tier": tier_key,
+        "relationship_tier_label": tier_label,
+        "public_profile": identity.public_profile,
+        "private_profile": identity.private_profile,
+    }
 
 
 @router.get("/ambient")
@@ -100,6 +122,9 @@ async def list_episodes(
             "content": r.content,
             "importance": r.importance,
             "is_anniversary": r.is_anniversary,
+            "recall_count": r.recall_count,
+            "last_recalled_at": r.last_recalled_at.isoformat() if r.last_recalled_at else None,
+            "is_archived": r.is_archived,
             "created_at": r.created_at.isoformat(),
         }
         for r in rows
@@ -238,19 +263,24 @@ async def consciousness_sea_graph(
         uid = f"qq_{ident.qq_id}"
         display = ident.nickname or str(ident.qq_id)
         has_private = bool(ident.private_profile)
+        tier_key, tier_label = relationship_tier(ident.relationship_level)
+        pub_norm = normalize_profile(ident.public_profile, relationship_level=ident.relationship_level)
+        priv_norm = normalize_profile(ident.private_profile, relationship_level=ident.relationship_level)
         _add_node(
             uid,
             display,
             "L4_identity",
             size=min(22, 13 + max(0, ident.relationship_level) // 10),
-            summary=f"QQ {ident.qq_id} · 亲密度 {ident.relationship_level}",
+            summary=f"QQ {ident.qq_id} · {tier_label}({ident.relationship_level})",
             detail={
                 "qq_id": ident.qq_id,
                 "nickname": ident.nickname,
                 "known_names": ident.known_names,
                 "relationship_level": ident.relationship_level,
-                "public_profile": ident.public_profile,
-                "private_profile": ident.private_profile,
+                "relationship_tier": tier_key,
+                "relationship_tier_label": tier_label,
+                "public_profile": pub_norm,
+                "private_profile": priv_norm,
                 "has_private_isolation": has_private,
             },
         )

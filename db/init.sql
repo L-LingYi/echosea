@@ -87,12 +87,16 @@ CREATE TABLE IF NOT EXISTS memory_episodes (
     event_date          DATE,
     embedding           vector(1536),
     embedding_json      JSONB,
+    recall_count        INTEGER NOT NULL DEFAULT 0,
+    last_recalled_at    TIMESTAMPTZ,
+    is_archived         BOOLEAN NOT NULL DEFAULT FALSE,
     tsv                 tsvector GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, ''))) STORED,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_episodes_scope ON memory_episodes (scope, group_id, qq_id);
 CREATE INDEX IF NOT EXISTS idx_memory_episodes_tsv ON memory_episodes USING GIN (tsv);
+CREATE INDEX IF NOT EXISTS idx_memory_episodes_archived ON memory_episodes (is_archived, importance DESC);
 
 -- 6. L4 Group Slang & Expression Review Bank
 CREATE TABLE IF NOT EXISTS group_expressions (
@@ -171,6 +175,10 @@ CREATE TABLE IF NOT EXISTS outbox_deliveries (
     payload_text        TEXT NOT NULL,
     status              VARCHAR(16) NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped_recall
     onebot_echo         VARCHAR(64),
+    feedback_status     VARCHAR(24) NOT NULL DEFAULT 'pending',
+    feedback_updated_at TIMESTAMPTZ,
+    gatekeeper_action   VARCHAR(32),
+    trigger_msg_id      VARCHAR(64),
     error_message       TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at             TIMESTAMPTZ
@@ -212,3 +220,21 @@ CREATE TABLE IF NOT EXISTS alert_events (
     delivered_channels  JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 12. Controlled Self-Evolution Review Queue
+CREATE TABLE IF NOT EXISTS evolution_suggestions (
+    id                  BIGSERIAL PRIMARY KEY,
+    suggestion_type     VARCHAR(32) NOT NULL,
+    status              VARCHAR(24) NOT NULL DEFAULT 'pending',
+    group_id            BIGINT,
+    source_request_id   VARCHAR(64),
+    title               VARCHAR(200) NOT NULL DEFAULT '',
+    content_json        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason              TEXT NOT NULL DEFAULT '',
+    expires_at          TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_evolution_suggestions_type_status
+    ON evolution_suggestions (suggestion_type, status, created_at DESC);

@@ -10,10 +10,11 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func as _sql_func
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.event_bus import PluginEventBus
@@ -35,8 +36,54 @@ from app.core.snowluma_adapter import SnowLumaAdapter
 from app.core.sticker_service import StickerService, extract_sticker_tags
 from app.core.tts_service import DoubaoTTSService, detect_voice_intent
 from app.core.web_perception_service import WebPerceptionService
-from app.models.db import ChatMessage, ImageVisionCache, PersonaVersion, PipelineTrace, SystemConfig
+from app.models.db import (
+    ChatMessage,
+    EvolutionSuggestion,
+    ImageVisionCache,
+    OutboxDelivery,
+    PersonaVersion,
+    PipelineTrace,
+    QQIdentity,
+    StickerAsset,
+    SystemConfig,
+)
 from app.models.schemas import GatekeeperDecision, MessageEnvelope
+
+REJECTION_FEEDBACK_CUES = (
+    "闭嘴",
+    "别说话",
+    "别回了",
+    "少插嘴",
+    "别接话",
+    "没问你",
+    "不是问你",
+    "人工智障",
+    "答非所问",
+    "烦死了",
+    "真蠢",
+    "智障",
+)
+ENGAGEMENT_FEEDBACK_CUES = (
+    "哈哈",
+    "笑死",
+    "草",
+    "确实",
+    "对对",
+    "牛",
+    "666",
+    "好家伙",
+    "有道理",
+    "懂了",
+    "谢谢",
+    "谢啦",
+    "不错",
+    "可以",
+    "真的假的",
+    "细说",
+    "乐",
+    "典",
+    "绷不住",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,12 +347,31 @@ class CompanionPipeline:
         envelope: MessageEnvelope,
         decision: GatekeeperDecision,
     ) -> tuple[list[dict[str, Any]], list[str], list[str], int]:
-        """On-demand vision: decode/cache up to 2 images on direct_pass or existing vision cache hit."""
-        if self.multimodal_service is None or not envelope.media_meta:
+        """On-demand vision: decode/cache up to 2 images on direct_pass, quoted image, high-heat sticker, or cache hit."""
+        if self.multimodal_service is None:
             return [], [], [], 0
 
-        image_items = [m for m in envelope.media_meta if m.get("type") in ("image", "mface") and m.get("url")][:2]
-        if not image_items:
+        candidate_items: list[tuple[dict[str, Any], bool]] = [
+            (m, False) for m in (envelope.media_meta or []) if m.get("type") in ("image", "mface") and m.get("url")
+        ]
+        # Include quoted message's image if user replied to an image message
+        if envelope.reply_to_msg_id and len(candidate_items) < 2:
+            q_stmt = (
+                select(ChatMessage.media_meta)
+                .where(
+                    ChatMessage.message_id == envelope.reply_to_msg_id,
+                    ChatMessage.scene == envelope.scene,
+                    ChatMessage.is_recalled.is_(False),
+                )
+                .limit(1)
+            )
+            q_media = (await session.execute(q_stmt)).scalar_one_or_none() or []
+            for m in q_media:
+                if isinstance(m, dict) and m.get("type") in ("image", "mface") and m.get("url"):
+                    candidate_items.append((m, True))
+
+        candidate_items = candidate_items[:2]
+        if not candidate_items:
             return [], [], [], 0
 
         image_blocks: list[dict[str, Any]] = []
@@ -314,7 +380,7 @@ class CompanionPipeline:
         cache_hits = 0
         fetcher = getattr(self.multimodal_service, "image_fetcher", None)
 
-        for item in image_items:
+        for item, is_quoted in candidate_items:
             url = str(item["url"])
             is_gif = url.lower().endswith(".gif")
             # Check URL match in vision cache first to avoid unnecessary downloads
@@ -326,7 +392,22 @@ class CompanionPipeline:
                 cache_hits += 1
                 continue
 
-            if decision.action != "direct_pass":
+            allow_decode = decision.action == "direct_pass" or (is_quoted and decision.action == "soft_entry")
+            if not allow_decode and decision.action == "soft_entry":
+                hot_sticker = (
+                    await session.execute(
+                        select(StickerAsset)
+                        .where(
+                            StickerAsset.source_url == url,
+                            or_(StickerAsset.appearance_count >= 2, StickerAsset.positive_reactions >= 1),
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if hot_sticker is not None or (cached_by_url is not None and cached_by_url.hit_count >= 2):
+                    allow_decode = True
+
+            if not allow_decode:
                 continue
 
             phash, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
@@ -347,6 +428,104 @@ class CompanionPipeline:
                     cache_hits += 1
 
         return image_blocks, vision_hints, pending_phashes, cache_hits
+
+    async def _evaluate_inbound_social_feedback(
+        self,
+        session: AsyncSession,
+        envelope: MessageEnvelope,
+        persona: PersonaVersion,
+        replied_to_bot: bool,
+    ) -> str | None:
+        """Backfill implicit social feedback (engaged / rejected) on bot group replies within 120s."""
+        if envelope.scene != "group" or envelope.group_id is None:
+            return None
+        bot_qq = envelope.self_qq or self.adapter.bot_qq
+        if bot_qq and envelope.sender_qq == bot_qq:
+            return None
+
+        now_utc = datetime.now(timezone.utc)
+        cutoff = now_utc - timedelta(seconds=120)
+        pending_rows = list(
+            (
+                await session.execute(
+                    select(OutboxDelivery)
+                    .where(
+                        OutboxDelivery.scene == "group",
+                        OutboxDelivery.target_id == envelope.group_id,
+                        OutboxDelivery.status == "sent",
+                        OutboxDelivery.feedback_status == "pending",
+                        OutboxDelivery.created_at >= cutoff,
+                    )
+                    .order_by(OutboxDelivery.created_at.desc())
+                    .limit(5)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not pending_rows:
+            return None
+
+        latest = pending_rows[0]
+        text = (envelope.raw_text or "").strip()
+        if not text:
+            return None
+
+        bot_mentioned = bool(bot_qq and bot_qq in envelope.mentioned_qqs)
+        other_mentioned = any(q != bot_qq for q in envelope.mentioned_qqs)
+        all_names = [n.strip().lower() for n in [persona.bot_name, *(persona.aliases or [])] if n and n.strip()]
+        mentions_bot_name = any(name in text.lower() for name in all_names)
+
+        verdict: str | None = None
+        if any(cue in text for cue in REJECTION_FEEDBACK_CUES) and (replied_to_bot or bot_mentioned or mentions_bot_name or not other_mentioned):
+            verdict = "rejected"
+        elif latest.trigger_msg_id:
+            orig_msg = (
+                await session.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.message_id == latest.trigger_msg_id, ChatMessage.group_id == envelope.group_id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if orig_msg is not None and orig_msg.sender_qq == envelope.sender_qq and not replied_to_bot:
+                q1 = self.memory_service._tokenize_for_recall(orig_msg.raw_text)
+                q2 = self.memory_service._tokenize_for_recall(text)
+                if q1 and q2 and (len(q1 & q2) / len(q1 | q2)) >= 0.75:
+                    verdict = "rejected"
+
+        if verdict is None and not other_mentioned:
+            if replied_to_bot or bot_mentioned or mentions_bot_name or any(cue in text for cue in ENGAGEMENT_FEEDBACK_CUES):
+                verdict = "engaged"
+
+        if verdict is None:
+            return None
+
+        target_req_id = latest.request_id
+        for row in pending_rows:
+            if row.request_id == target_req_id or target_req_id is None:
+                row.feedback_status = verdict
+                row.feedback_updated_at = now_utc
+
+        ident = await session.get(QQIdentity, envelope.sender_qq)
+        if ident is not None:
+            delta = 1 if verdict == "engaged" else -2
+            ident.relationship_level = max(0, int(ident.relationship_level or 0) + delta)
+
+        if verdict == "engaged" and target_req_id:
+            trace_row = (
+                await session.execute(
+                    select(PipelineTrace)
+                    .where(PipelineTrace.request_id == target_req_id, PipelineTrace.stage == "main_brain")
+                    .order_by(PipelineTrace.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            ep_ids = (trace_row.meta_json or {}).get("recalled_episode_ids", []) if trace_row else []
+            if ep_ids:
+                await self.memory_service.reinforce_episodes(session, ep_ids)
+
+        await session.flush()
+        return verdict
 
     async def process_envelope(
         self,
@@ -389,6 +568,10 @@ class CompanionPipeline:
             return {"handled": "disabled_by_config", "request_id": request_id}
 
         replied_to_bot = bool(envelope.self_qq and envelope.quoted_sender_qq == envelope.self_qq)
+
+        # 2b. Implicit Social Feedback Backfill (observe group reactions within 120s of bot reply)
+        if envelope.scene == "group" and envelope.group_id is not None:
+            await self._evaluate_inbound_social_feedback(session, envelope, persona, replied_to_bot)
 
         # 3. Three-Layer Gatekeeper Evaluation (lock-free threshold passed per request)
         t_gk = time.perf_counter()
@@ -526,20 +709,45 @@ class CompanionPipeline:
             await self._trace(session, request_id, envelope.scene, envelope.group_id, "onebot", out.onebot_status)
             return {"handled": "voice_fallback_text", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
 
-        # 7. Assemble 5-Layer Memory (Hybrid L3 Recall) + On-demand Multimodal Vision + Slow Daily Briefing
+        # 7. Assemble 5-Layer Memory (Hybrid L3 Recall) + On-demand Multimodal Vision + Slow Daily Briefing + 48h Self-Correction Hints
         image_blocks, vision_hints, pending_vision_phashes, vision_cache_hits = await self._collect_vision_context(
             session, envelope, decision
         )
+        query_embedding = await self.model_hub.embed_text(session, envelope.raw_text)
         memory_ctx = await self.memory_service.assemble_context(
             session=session,
             scene=envelope.scene,
             sender_qq=envelope.sender_qq,
             group_id=envelope.group_id,
             query_text=envelope.raw_text,
+            query_embedding=query_embedding,
         )
         briefing_text = ""
         if self.web_perception is not None:
             briefing_text = await self.web_perception.get_latest_briefing_text(session)
+
+        now_utc = datetime.now(timezone.utc)
+        hint_rows = list(
+            (
+                await session.execute(
+                    select(EvolutionSuggestion)
+                    .where(
+                        EvolutionSuggestion.suggestion_type == "correction_hint",
+                        EvolutionSuggestion.status == "active",
+                        or_(EvolutionSuggestion.expires_at.is_(None), EvolutionSuggestion.expires_at > now_utc),
+                    )
+                    .order_by(EvolutionSuggestion.created_at.desc())
+                    .limit(3)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        correction_hints = [
+            str((r.content_json or {}).get("hint") or r.title).strip()
+            for r in hint_rows
+            if str((r.content_json or {}).get("hint") or r.title).strip()
+        ]
 
         messages = self.build_prompt_messages(
             persona,
@@ -551,6 +759,7 @@ class CompanionPipeline:
             enable_webpage_fetch=bool(self.web_perception and self.web_perception.webpage_fetch_enabled),
             image_blocks=image_blocks or None,
             vision_hints=vision_hints or None,
+            correction_hints=correction_hints or None,
         )
 
         # 8. Invoke Main Brain via Model Control Center (with autonomous Tool Calling)
@@ -576,6 +785,7 @@ class CompanionPipeline:
                     "used_fallback": completion.used_fallback,
                     "tool_calls": len(completion.tool_calls),
                     "recalled_episodes": memory_ctx.get("l3_recall_meta", {}).get("recalled_count", len(memory_ctx["l3_episodes"])),
+                    "recalled_episode_ids": memory_ctx.get("l3_recall_meta", {}).get("recalled_episode_ids", []),
                     "recall_mode": memory_ctx.get("l3_recall_meta", {}).get("mode", "default"),
                     "vision_cache_hits": vision_cache_hits,
                     "vision_blocks": len(image_blocks),
@@ -608,6 +818,9 @@ class CompanionPipeline:
                     filler_text,
                 )
                 f_out.request_id = request_id
+                f_out.feedback_status = "none"
+                f_out.gatekeeper_action = decision.action
+                f_out.trigger_msg_id = envelope.message_id
                 filler_delivery = {
                     "id": f_out.id,
                     "text": filler_text,
@@ -722,6 +935,9 @@ class CompanionPipeline:
                 reply_to_msg_id=reply_id,
             )
             delivery.request_id = request_id
+            delivery.gatekeeper_action = decision.action
+            delivery.trigger_msg_id = envelope.message_id
+            delivery.feedback_status = "pending" if envelope.scene == "group" else "none"
             deliveries.append({"id": delivery.id, "text": bubble, "status": delivery.status, "onebot_status": delivery.onebot_status})
 
         receipt_statuses = {delivery["onebot_status"] for delivery in deliveries}
@@ -750,6 +966,10 @@ class CompanionPipeline:
                 sent_sticker = {"id": asset.id, "tag": sticker_tags[0], "phash": asset.phash}
 
         bot_qq = envelope.self_qq or self.adapter.bot_qq
+        if decision.action == "direct_pass":
+            speaker_ident = await session.get(QQIdentity, envelope.sender_qq)
+            if speaker_ident is not None:
+                speaker_ident.relationship_level = int(speaker_ident.relationship_level or 0) + 1
         if bot_qq and bubbles:
             await self.identity_service.upsert_from_message(
                 session, qq_id=bot_qq, nickname=persona.bot_name, group_id=envelope.group_id, group_card=persona.bot_name

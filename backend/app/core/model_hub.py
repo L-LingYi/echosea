@@ -578,6 +578,37 @@ class ModelHubService:
             "reason": f"Jev System One (target={target}{conf_part}, noul={clamped_score:.2f})",
         }
 
+    async def embed_text(self, session: AsyncSession, text: str) -> list[float] | None:
+        """Optionally compute a semantic embedding using the 'embedding' slot; returns None if unconfigured."""
+        clean = (text or "").strip()
+        if not clean:
+            return None
+        stmt = (
+            select(ModelProvider)
+            .where(ModelProvider.slot == "embedding", ModelProvider.is_enabled.is_(True))
+            .order_by(ModelProvider.role.desc())
+        )
+        providers = list((await session.execute(stmt)).scalars().all())
+        if not providers:
+            return None
+        for provider in self._order_providers_with_cooldown(providers):
+            try:
+                api_key = decrypt_secret(provider.api_key_enc, self.master_key)
+                url = f"{provider.base_url.rstrip('/')}/embeddings"
+                headers = {"Content-Type": "application/json"}
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                async with httpx.AsyncClient(timeout=min(10.0, float(provider.timeout_seconds))) as client:
+                    resp = await client.post(url, headers=headers, json={"model": provider.model_name, "input": clean[:1500]})
+                    resp.raise_for_status()
+                    data = resp.json()
+                emb = ((data.get("data") or [{}])[0]).get("embedding")
+                if isinstance(emb, list) and emb:
+                    return [float(x) for x in emb]
+            except Exception as exc:
+                logger.debug("Embedding call skipped/failed for %s: %s", provider.name, exc)
+        return None
+
     async def probe_provider(self, session: AsyncSession, provider_id: int) -> dict[str, Any]:
         """One-click live health check tagged with source='probe' (excluded from prod stats).
         A successful probe also clears any active cooldown on the provider.

@@ -33,6 +33,8 @@ export const STATUS_LABELS = {
   approved: '已启用',
   pending: '待审核',
   rejected: '已拒绝',
+  active: '生效中',
+  expired: '已过期',
   succeeded: '成功',
   running: '进行中',
   failed: '失败',

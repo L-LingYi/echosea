@@ -32,9 +32,9 @@ class AutoStickerReactionPlugin(CompanionPlugin):
     """Monitors group reactions after images to automatically steal high-heat stickers."""
 
     name = "auto_sticker_reaction"
-    version = "1.0.0"
-    description = "监测群聊图片后的正向反应（哈哈/草/偷了）自动触发偷图入库"
-    timeout_seconds = 3.0
+    version = "1.1.0"
+    description = "监测群聊图片后的正向反应（哈哈/草/偷了）异步触发 dHash 去重偷图入库"
+    timeout_seconds = 5.0
 
     def register(self, bus: PluginEventBus, runtime: Any) -> None:
         async def _on_evaluated(payload: dict[str, Any]) -> None:
@@ -60,7 +60,7 @@ class AutoStickerReactionPlugin(CompanionPlugin):
                 for item in media:
                     if item.get("type") in ("image", "mface") and item.get("url"):
                         fetcher = getattr(getattr(runtime, "multimodal_service", None), "image_fetcher", None)
-                        phash, _img_bytes = await resolve_image_phash(str(item["url"]), timeout=3.0, fetcher=fetcher)
+                        phash, img_bytes = await resolve_image_phash(str(item["url"]), timeout=2.5, fetcher=fetcher)
                         asset = await runtime.sticker_service.observe_group_image(
                             session=session,
                             group_id=group_id,
@@ -72,7 +72,7 @@ class AutoStickerReactionPlugin(CompanionPlugin):
                             session=session,
                             asset=asset,
                             surrounding_messages=surrounding,
-                            model_hub=runtime.model_hub,
+                            model_hub=getattr(runtime, "model_hub", None),
                         )
                 raw_text = str(env.get("raw_text") or "")
                 if raw_text:

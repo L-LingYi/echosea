@@ -8,7 +8,16 @@ import {
   toggleTheme,
 } from './api.js';
 import { loadDashboard, switchUsageGranularity } from './dashboard.js';
-import { initSeaControls, loadConsciousnessSea, loadUnifiedMemory, seaResetView, seaZoom, switchMemoryView } from './sea.js';
+import {
+  closeIdentityModal,
+  initIdentityModal,
+  initSeaControls,
+  loadConsciousnessSea,
+  loadUnifiedMemory,
+  seaResetView,
+  seaZoom,
+  switchMemoryView,
+} from './sea.js';
 import { loadTraces } from './traces.js';
 import { closeProviderModal, initProvidersForm, loadProviders, openProviderModal } from './providers.js';
 import { importStickers, loadStickers, uploadStickerFile } from './stickers.js';
@@ -96,6 +105,8 @@ const ACTION_MAP = {
   'load-providers': () => loadProviders(),
   'open-provider-modal': () => openProviderModal(),
   'close-provider-modal': () => closeProviderModal(),
+  'close-identity-modal': () => closeIdentityModal(),
+  'load-persona': () => loadPersona(),
   'toggle-import-box': () => document.getElementById('importBox').classList.toggle('hidden'),
   'load-stickers': () => loadStickers(),
   'upload-sticker-file': () => uploadStickerFile(),
@@ -166,7 +177,15 @@ function bindUI() {
     });
   }
 
+  const idModal = document.getElementById('identityModal');
+  if (idModal) {
+    idModal.addEventListener('click', e => {
+      if (e.target === idModal) closeIdentityModal();
+    });
+  }
+
   initSeaControls();
+  initIdentityModal();
   initProvidersForm();
   initPersonaForm();
   initHotSourceForm();

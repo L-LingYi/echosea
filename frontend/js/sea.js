@@ -69,6 +69,114 @@ export async function forgetUser(qq) {
   loadUnifiedMemory();
 }
 
+const _splitCsv = val => String(val || '').split(/[,，]/).map(x => x.trim()).filter(Boolean);
+const _joinCsv = arr => (Array.isArray(arr) ? arr.join(', ') : '');
+
+export function closeIdentityModal() {
+  const modal = document.getElementById('identityModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+export function openIdentityModal(ident) {
+  const modal = document.getElementById('identityModal');
+  if (!modal || !ident) return;
+  const pub = ident.public_profile || {};
+  const priv = ident.private_profile || {};
+  const pubRel = pub.relationship || {};
+  const pubTraits = pub.stable_traits || {};
+  const privRel = priv.relationship || {};
+  const privTraits = priv.stable_traits || {};
+
+  document.getElementById('identityFormTitle').textContent = `编辑四维画像 · QQ ${ident.qq_id}`;
+  document.getElementById('idEditQq').value = String(ident.qq_id);
+  document.getElementById('idNickname').value = ident.nickname || '';
+  document.getElementById('idRelLevel').value = String(Number(ident.relationship_level || 0));
+
+  document.getElementById('idPubAddr').value = pubRel.preferred_address || '';
+  document.getElementById('idPubStyle').value = pubRel.interaction_style || '';
+  document.getElementById('idPubBound').value = _joinCsv(pubRel.boundaries);
+  document.getElementById('idPubInterests').value = _joinCsv(pubTraits.interests || pub.interests);
+  document.getElementById('idPubExpertise').value = _joinCsv(pubTraits.expertise);
+  document.getElementById('idPubSchedule').value = _joinCsv(pubTraits.schedule_habits);
+  document.getElementById('idPubStates').value = _joinCsv((pub.recent_states || []).map(s => s.text));
+  document.getElementById('idPubCandidates').value = _joinCsv((pub.candidate_clues || []).map(c => c.value));
+
+  document.getElementById('idPrivAddr').value = privRel.preferred_address || '';
+  document.getElementById('idPrivStyle').value = privRel.interaction_style || '';
+  document.getElementById('idPrivBound').value = _joinCsv(privRel.boundaries);
+  document.getElementById('idPrivInterests').value = _joinCsv(privTraits.interests || priv.interests);
+  document.getElementById('idPrivExpertise').value = _joinCsv(privTraits.expertise);
+  document.getElementById('idPrivSchedule').value = _joinCsv(privTraits.schedule_habits);
+  document.getElementById('idPrivStates').value = _joinCsv((priv.recent_states || []).map(s => s.text));
+  modal.dataset.rawPub = JSON.stringify(pub);
+  modal.dataset.rawPriv = JSON.stringify(priv);
+  modal.classList.remove('hidden');
+}
+
+function _buildEditedStates(rawList, inputTexts) {
+  const now = new Date();
+  const expDefault = new Date(now.getTime() + 10 * 86400 * 1000).toISOString();
+  const byText = new Map((rawList || []).map(s => [s.text, s]));
+  return inputTexts.map(txt => byText.get(txt) || { text: txt, created_at: now.toISOString(), expires_at: expDefault });
+}
+
+export function initIdentityModal() {
+  const form = document.getElementById('identityForm');
+  if (!form) return;
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const modal = document.getElementById('identityModal');
+    const qq = Number(document.getElementById('idEditQq').value);
+    const oldPub = JSON.parse(modal.dataset.rawPub || '{}');
+    const oldPriv = JSON.parse(modal.dataset.rawPriv || '{}');
+
+    const candAllow = new Set(_splitCsv(document.getElementById('idPubCandidates').value));
+    const keptCands = (oldPub.candidate_clues || []).filter(c => candAllow.has(c.value));
+
+    const publicProfile = {
+      relationship: {
+        preferred_address: document.getElementById('idPubAddr').value.trim(),
+        interaction_style: document.getElementById('idPubStyle').value.trim(),
+        boundaries: _splitCsv(document.getElementById('idPubBound').value),
+      },
+      stable_traits: {
+        interests: _splitCsv(document.getElementById('idPubInterests').value),
+        expertise: _splitCsv(document.getElementById('idPubExpertise').value),
+        schedule_habits: _splitCsv(document.getElementById('idPubSchedule').value),
+      },
+      candidate_clues: keptCands,
+      recent_states: _buildEditedStates(oldPub.recent_states, _splitCsv(document.getElementById('idPubStates').value)),
+    };
+    const privateProfile = {
+      relationship: {
+        preferred_address: document.getElementById('idPrivAddr').value.trim(),
+        interaction_style: document.getElementById('idPrivStyle').value.trim(),
+        boundaries: _splitCsv(document.getElementById('idPrivBound').value),
+      },
+      stable_traits: {
+        interests: _splitCsv(document.getElementById('idPrivInterests').value),
+        expertise: _splitCsv(document.getElementById('idPrivExpertise').value),
+        schedule_habits: _splitCsv(document.getElementById('idPrivSchedule').value),
+      },
+      candidate_clues: oldPriv.candidate_clues || [],
+      recent_states: _buildEditedStates(oldPriv.recent_states, _splitCsv(document.getElementById('idPrivStates').value)),
+    };
+
+    await api(`/api/memory/identities/${qq}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        nickname: document.getElementById('idNickname').value.trim(),
+        relationship_level: parseInt(document.getElementById('idRelLevel').value || '0', 10),
+        public_profile: publicProfile,
+        private_profile: privateProfile,
+      }),
+    });
+    toast(`已更新 QQ ${qq} 的四维画像`);
+    closeIdentityModal();
+    loadUnifiedMemory();
+  });
+}
+
 export async function loadMemoryTables() {
   const [ids, amb, slangs] = await Promise.all([
     api('/api/memory/identities'),
@@ -86,8 +194,17 @@ export async function loadMemoryTables() {
         el('td', {}, el('code', {}, i.qq_id)),
         el('td', {}, el('strong', {}, i.nickname || '-')),
         el('td', {}, el('div', { className: 'pill-list' }, ...(i.known_names && i.known_names.length ? i.known_names.map(n => badge(n, 'info')) : ['-']))),
-        el('td', {}, Number(i.relationship_level)),
-        el('td', {}, el('button', { className: 'btn sm danger', type: 'button', onClick: () => forgetUser(Number(i.qq_id)) }, '一键忘却')),
+        el('td', {}, `${Number(i.relationship_level)} `, badge(i.relationship_tier_label || '初识', i.relationship_tier === 'close_pal' ? 'ok' : (i.relationship_tier === 'acquaintance' ? 'info' : 'warn'))),
+        el(
+          'td',
+          {},
+          el(
+            'div',
+            { className: 'row-actions' },
+            el('button', { className: 'btn sm secondary', type: 'button', onClick: () => openIdentityModal(i) }, '编辑画像'),
+            el('button', { className: 'btn sm danger', type: 'button', onClick: () => forgetUser(Number(i.qq_id)) }, '一键忘却'),
+          ),
+        ),
       )),
     );
   }
@@ -175,14 +292,40 @@ function renderInspector(node) {
         el('div', { className: 'pill-list' }, ...(names.length ? names : [el('span', { style: 'color:#64748b;' }, '无')])),
       ),
     );
-    const interests = ((d.public_profile || {}).interests || []).map(x => badge(x, 'ok'));
-    if (interests.length) {
+    const pub = d.public_profile || {};
+    const pubTraits = pub.stable_traits || {};
+    const pubRel = pub.relationship || {};
+    const traitList = [
+      ...(pubTraits.interests || pub.interests || []),
+      ...(pubTraits.expertise || []),
+      ...(pubTraits.schedule_habits || []),
+    ];
+    if (pubRel.interaction_style || pubRel.preferred_address) {
+      extraNodes.push(
+        el(
+          'div',
+          { style: 'margin:8px 0;font-size:12px;color:#cbd5e1;' },
+          `互动分寸：${[pubRel.preferred_address && `称呼:${pubRel.preferred_address}`, pubRel.interaction_style].filter(Boolean).join(' · ')}`,
+        ),
+      );
+    }
+    if (traitList.length) {
       extraNodes.push(
         el(
           'div',
           { style: 'margin:8px 0;' },
-          el('div', { style: 'color:#94a3b8;font-size:11px;margin-bottom:4px;' }, '公开兴趣画像'),
-          el('div', { className: 'pill-list' }, ...interests),
+          el('div', { style: 'color:#94a3b8;font-size:11px;margin-bottom:4px;' }, '公开稳定特征'),
+          el('div', { className: 'pill-list' }, ...traitList.map(x => badge(x, 'ok'))),
+        ),
+      );
+    }
+    if ((pub.recent_states || []).length) {
+      extraNodes.push(
+        el(
+          'div',
+          { style: 'margin:8px 0;' },
+          el('div', { style: 'color:#94a3b8;font-size:11px;margin-bottom:4px;' }, '近期状态（带TTL）'),
+          el('div', { className: 'pill-list' }, ...pub.recent_states.map(s => badge(s.text, 'warn'))),
         ),
       );
     }
@@ -193,8 +336,9 @@ function renderInspector(node) {
       extraNodes.push(
         el(
           'div',
-          { style: 'margin:10px 0;' },
-          el('button', { className: 'btn sm danger', style: 'width:100%;', type: 'button', onClick: () => forgetUser(Number(d.qq_id)) }, '一键忘却该 QQ 记忆'),
+          { style: 'margin:10px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px;' },
+          el('button', { className: 'btn sm secondary', type: 'button', onClick: () => openIdentityModal(d) }, '编辑四维画像'),
+          el('button', { className: 'btn sm danger', type: 'button', onClick: () => forgetUser(Number(d.qq_id)) }, '一键忘却'),
         ),
       );
     }
