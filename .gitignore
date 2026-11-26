@@ -16,3 +16,5 @@ logs/
 *.db-shm
 *.sqlite*
 .DS_Store
+.vscode/
+
