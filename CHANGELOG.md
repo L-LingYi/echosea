@@ -1,10 +1,18 @@
 # 更新日志（Changelog）
 
+## v1.9.3 (2026-11-27)
+- **3D 记忆意识海重构与 WebUI 深海观测站视觉升级**：
+  - **3D 发光星海与悬停名片/记忆摘要**：将 `frontend/js/sea.js` 升级为零依赖 3D 轨道相机星图，默认以发光顶点 + 精简名称呈现，中心始终锁定在 `EchoSea · 意识核心` 并自动避开右侧详情抽屉占位；鼠标悬浮光点即弹出对应人物名片卡或记忆摘要卡，支持「人物 · 记忆」精简视图与「全量五层」切换、关键词检索直达、按群域筛选与 `3D / 2D` 切换。
+  - **记忆图谱增强与直接管理**：`GET /api/memory/graph` 补充 `include_archived`、人物关联记忆计数及回忆次数元数据；新增 `PATCH /api/memory/episodes/{id}` 与 `DELETE /api/memory/episodes/{id}`，支持在详情抽屉中直接标星纪念日、归档或删除记忆。
+  - **全站深海观测站主题与防缓存**：统一雾海浅色 / 深海夜幕双主题，侧边栏替换为统一尺寸线性 SVG 图标，并为 `/` 与 `/static/*` 注入 `Cache-Control: no-cache` 响应头，彻底消除更新后的旧样式缓存错乱。
+- **在线更新体验与容错加固**：
+  - 宿主机更新器 `host_updater.py` 在更新前预检兼容手动重启后 `/healthz` 缺少 `commit` 的场景（更新后健康检查仍严格校验新提交哈希）。
+  - WebUI 更新流程新增 `sessionStorage` 持久化任务追踪与后台轮询，容器重启期间自动静默等待恢复，更新完成后自动刷新网页；更新历史表默认精简展示最近 5 条记录及短哈希。
+- **表情包本地缓存代拉与夜间反思自动审核**：
+  - `AutoStickerReactionPlugin` 采集群图时落盘保存 `image_bytes`，新增 `GET /api/stickers/{id}/image` 优先读取本地缓存并在缺失时无 Referer 代拉回填，彻底解决待审核表情缩略图因 QQ 防盗链/`rkey` 过期不显示的问题。
+  - `ReflectionService.run_nightly_reflection()` 新增 `_review_pending_stickers()`，在凌晨反思与手动反思阶段自动调用反思模型（含规则兜底）审核待审表情包、过滤报错截图/二维码噪声并润色中文标签。
+
 ## v1.9.2 (2026-11-26)
-- **3D 意识海重构与 WebUI 深海观测站视觉升级**：
-  - **3D 分层星海与人物名片 / 记忆摘要卡**：将 `frontend/js/sea.js` 升级为零依赖 3D 轨道相机 + 3D 投影浮动 DOM 卡片混合渲染引擎；支持「人物 · 记忆」默认聚焦视图与「全量五层星海」切换、`3D 星海 / 2D 平面` 切换、平滑镜头飞行聚焦、关键字检索直达、按群域筛选与自动缓慢自转。人物节点直接展示迷你名片（熟人等级、称呼/风格、特征标签与记忆计数），点击人物即可展开围绕 TA 的记忆摘要卡（区分群情景、纪念日与私聊半隔离边界）。
-  - **记忆图谱增强与直接管理**：`GET /api/memory/graph` 新增 `include_archived` 参数与人物关联记忆计数、情景回忆次数/重要度等元数据；新增 `PATCH /api/memory/episodes/{id}` 与 `DELETE /api/memory/episodes/{id}` 接口，支持在意识海详情抽屉中直接标星纪念日、归档或删除记忆。
-  - **全站 UI 统一视觉精修**：重构 `frontend/css/app.css` 与 `frontend/index.html` 为「深海观测站」双色主题系统（雾海浅色 / 深海夜幕），使用统一线性 SVG 图标替换侧边栏 Emoji，统一等宽数字排版、玻璃态工具栏与可收起详情抽屉。
 - **群聊/私聊引用回溯与私聊多轮连续性修复**：
   - `SnowLumaAdapter` 捕获取消丢弃的网关真实 `message_id`（HTTP 回执与 WS Echo 均支持）并写入 `OutboxDelivery.onebot_message_id`；`CompanionPipeline` 按每个实际发送成功的气泡分别写入 `ChatMessage`（保留 `request_id` 关联整轮，同时覆盖搜索过渡语与语音回复），发送失败的气泡不再写入已发言记录。
   - `ChatMessage` 新增 `peer_qq` 与 `request_id` 字段（含幂等迁移 `db/migrations_v1_5.sql`），修复私聊 L1 历史查询丢失机器人上一句及私聊引用机器人回复查不到原文的问题。

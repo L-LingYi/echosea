@@ -48,6 +48,7 @@ const SEA = {
   goalTargetX: 0,
   goalTargetY: 0,
   goalTargetZ: 0,
+  centerOffsetX: 0,
   fov: 680,
   // Interaction state
   selected: null,
@@ -634,7 +635,7 @@ export function seaResetView() {
   SEA.goalTargetZ = 0;
   SEA.goalYaw = SEA.mode3d ? 0.35 : 0;
   SEA.goalPitch = SEA.mode3d ? 0.28 : 0;
-  SEA.goalDistance = window.innerWidth < 768 ? 720 : 580;
+  SEA.goalDistance = window.innerWidth < 768 ? 680 : 500;
   SEA.autoRotate = SEA.mode3d;
   syncToolbarState();
 }
@@ -1046,11 +1047,12 @@ function updateHoverCard(node, proj, stageW, stageH) {
   const card = SEA._hoverCardEl;
   const cw = card.offsetWidth || 224;
   const ch = card.offsetHeight || 110;
-  // Position slightly above-right of the glowing orb, clamped within stage bounds
+  const rightSafe = (SEA.inspectorOpen && stageW > 768) ? (stageW - 344) : (stageW - 12);
+  // Position slightly above-right of the glowing orb, clamped within visible canvas area (avoiding right inspector)
   let left = proj.sx + 18;
   let top = proj.sy - ch / 2;
-  if (left + cw > stageW - 16) left = proj.sx - cw - 18;
-  left = Math.max(12, Math.min(stageW - cw - 12, left));
+  if (left + cw > rightSafe) left = proj.sx - cw - 18;
+  left = Math.max(12, Math.min(Math.max(12, rightSafe - cw), left));
   top = Math.max(12, Math.min(stageH - ch - 12, top));
   card.style.transform = `translate3d(${left.toFixed(1)}px, ${top.toFixed(1)}px, 0)`;
   card.style.zIndex = '2300';
@@ -1227,7 +1229,7 @@ function projectPoint(wx, wy, wz, W, H, cosY, sinY, cosP, sinP) {
   if (depth < 40) return null;
   const scale = SEA.fov / depth;
   return {
-    sx: W / 2 + rx * scale,
+    sx: W / 2 + SEA.centerOffsetX + rx * scale,
     sy: H / 2 + ry * scale,
     scale,
     depth,
@@ -1272,8 +1274,10 @@ function startSeaLoop() {
         SEA.goalYaw += 0.0018;
       }
 
-      // Smooth camera damping
+      // Smooth camera damping + visual center offset to account for right-hand inspector panel
       const damp = 0.1;
+      const goalOffsetX = (SEA.inspectorOpen && W > 768) ? -168 : 0;
+      SEA.centerOffsetX += (goalOffsetX - SEA.centerOffsetX) * 0.14;
       SEA.yaw += (SEA.goalYaw - SEA.yaw) * damp;
       SEA.pitch += (SEA.goalPitch - SEA.pitch) * damp;
       SEA.distance += (SEA.goalDistance - SEA.distance) * damp;

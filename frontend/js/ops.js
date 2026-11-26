@@ -263,13 +263,18 @@ export async function loadOps() {
   );
 
   const fmtUpdMode = m => (m === 'github_public' ? 'GitHub' : (m === 'local_repo' ? '受控更新源' : m));
+  const shortRef = v => {
+    const s = String(v || '');
+    return /^[0-9a-f]{16,40}$/i.test(s) ? s.slice(0, 10) : (s || '-');
+  };
   const jobs = upd.jobs || [];
-  if (!jobs.length) {
+  const recentJobs = jobs.slice(0, 5);
+  if (!recentJobs.length) {
     replaceChildren('updateJobTable', el('tr', {}, el('td', { colSpan: 6, className: 'empty-state' }, '暂无在线更新记录')));
   } else {
     replaceChildren(
       'updateJobTable',
-      jobs.map(j => {
+      recentJobs.map(j => {
         const cls = j.status === 'succeeded'
           ? 'ok'
           : ((j.status === 'running' || j.status === 'pending') ? 'info' : (j.status === 'confirmation_required' ? 'warn' : 'err'));
@@ -289,12 +294,14 @@ export async function loadOps() {
             ),
           )
           : j.log_summary;
+        const fromFull = j.from_commit || j.from_version || '-';
+        const toFull = j.to_commit || '-';
         return el(
           'tr',
           {},
           el('td', {}, el('code', {}, j.job_uid)),
-          el('td', {}, `${fmtUpdMode(j.mode)} / ${j.target_ref}`),
-          el('td', {}, el('code', {}, j.from_commit || j.from_version), ' → ', el('code', {}, j.to_commit || '-')),
+          el('td', { title: j.target_ref || '' }, `${fmtUpdMode(j.mode)} / ${shortRef(j.target_ref)}`),
+          el('td', {}, el('code', { title: fromFull }, shortRef(fromFull)), ' → ', el('code', { title: toFull }, shortRef(toFull))),
           el('td', {}, badge(labelOf(STATUS_LABELS, j.status), cls)),
           el('td', {}, actionCell),
           el('td', {}, formatLocalTime(j.created_at)),
