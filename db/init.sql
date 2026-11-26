@@ -173,7 +173,9 @@ CREATE TABLE IF NOT EXISTS outbox_deliveries (
     target_id           BIGINT NOT NULL,
     reply_to_msg_id     VARCHAR(64),
     payload_text        TEXT NOT NULL,
-    status              VARCHAR(16) NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped_recall
+    status              VARCHAR(24) NOT NULL DEFAULT 'pending', -- pending | sent | failed | skipped_recall
+    request_id          VARCHAR(64),
+    onebot_status       VARCHAR(24) NOT NULL DEFAULT 'pending',
     onebot_echo         VARCHAR(64),
     feedback_status     VARCHAR(24) NOT NULL DEFAULT 'pending',
     feedback_updated_at TIMESTAMPTZ,
@@ -195,6 +197,8 @@ CREATE TABLE IF NOT EXISTS usage_metrics (
     estimated_cost_usd  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     ttft_ms             INTEGER NOT NULL DEFAULT 0,
     total_ms            INTEGER NOT NULL DEFAULT 0,
+    source              VARCHAR(24) NOT NULL DEFAULT 'production',
+    request_id          VARCHAR(64),
     success             BOOLEAN NOT NULL DEFAULT TRUE,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

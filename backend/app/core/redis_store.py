@@ -23,6 +23,7 @@ class StateStore:
         # In-memory fallback structures
         self._kv: dict[str, tuple[str, float | None]] = {}
         self._zsets: dict[str, list[float]] = defaultdict(list)
+        self._event_seq: int = 0
 
     async def connect(self) -> None:
         if self._force_memory or not self._redis_url or aioredis is None:
@@ -155,7 +156,7 @@ class StateStore:
         self, group_id: int, user_qq: int, ttl_seconds: int = 260
     ) -> None:
         """Refresh per-user focused attention timestamp and monotonic sequence after bot interacts with this user."""
-        seq = getattr(self, "_event_seq", 0) + 1
+        seq = self._event_seq + 1
         self._event_seq = seq
         await self.set_json(
             f"attention:{group_id}:{user_qq}",
@@ -184,7 +185,7 @@ class StateStore:
         ttl_seconds: int = 300,
     ) -> None:
         """Track the latest human speaker in a group to detect third-party topic interruptions."""
-        seq = getattr(self, "_event_seq", 0) + 1
+        seq = self._event_seq + 1
         self._event_seq = seq
         await self.set_json(
             f"group_last_human:{group_id}",

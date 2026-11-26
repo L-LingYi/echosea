@@ -496,20 +496,29 @@ class MemoryService:
         msg_res = await session.execute(delete(ChatMessage).where(and_(*msg_conds)))
         ep_res = await session.execute(delete(MemoryEpisode).where(and_(*ep_conds)))
 
-        # Remove ambient summaries where this user participated in the affected window
-        amb_stmt = select(AmbientSummary)
+        # Remove ambient summaries where this user participated in the affected window.
+        # Push time-window bounds (and JSONB containment on PostgreSQL) into SQL;
+        # SQLite falls back to filtering active_participants in Python.
+        amb_conds = []
+        if start_time is not None:
+            amb_conds.append(AmbientSummary.window_end >= start_time)
+        if end_time is not None:
+            amb_conds.append(AmbientSummary.window_start <= end_time)
+
+        dialect_name = getattr(getattr(session.bind, "dialect", None), "name", "")
+        if dialect_name == "postgresql":
+            from sqlalchemy import cast
+            from sqlalchemy.dialects.postgresql import JSONB
+
+            amb_conds.append(cast(AmbientSummary.active_participants, JSONB).contains([qq_id]))
+
+        amb_stmt = select(AmbientSummary).where(and_(*amb_conds)) if amb_conds else select(AmbientSummary)
         amb_rows = list((await session.execute(amb_stmt)).scalars().all())
         amb_deleted = 0
         for row in amb_rows:
             if qq_id in (row.active_participants or []):
-                in_range = True
-                if start_time and row.window_end < start_time:
-                    in_range = False
-                if end_time and row.window_start > end_time:
-                    in_range = False
-                if in_range:
-                    await session.delete(row)
-                    amb_deleted += 1
+                await session.delete(row)
+                amb_deleted += 1
 
         profile_wiped = 0
         if wipe_profile:

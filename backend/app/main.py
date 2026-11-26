@@ -82,6 +82,24 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Reject known-insecure default secrets in production at server startup
+        # (kept inside lifespan so importing app.main in tests/CLI without .env still works)
+        _INSECURE_DEFAULTS = {
+            "change-me-32-byte-master-key-for-aes-gcm!",
+            "change-me-jwt-signing-secret-key-2026!",
+        }
+        if settings.environment == "production" and settings_override is None:
+            import logging as _log
+            _startup_log = _log.getLogger(__name__)
+            if settings.master_encryption_key in _INSECURE_DEFAULTS:
+                raise RuntimeError("MASTER_ENCRYPTION_KEY must be changed from the default value in production!")
+            if settings.jwt_secret_key in _INSECURE_DEFAULTS:
+                raise RuntimeError("JWT_SECRET_KEY must be changed from the default value in production!")
+            if settings.admin_default_password in ("companion2026", "ChangeMeStrongPass2026!"):
+                _startup_log.warning(
+                    "SECURITY WARNING: ADMIN_DEFAULT_PASSWORD is still set to a known default. "
+                    "Please change it immediately after first login."
+                )
         app.state.settings = settings
         app.state.shutting_down = False
         app.state.in_flight_tasks = set()
@@ -299,6 +317,7 @@ def create_app(
         await pipeline.debouncer.drain(timeout=3.0)
         await pipeline.drain_background_tasks(timeout=3.0)
         await event_bus.drain_background(timeout=min(5.0, drain_timeout))
+        await model_hub.aclose()
         await store.close()
         await db_mgr.dispose()
 

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Core App
     app_name: str = "EchoSea（回声海）"
-    app_version: str = "1.9.0"
+    app_version: str = "1.9.1"
     app_timezone: str = Field(default="Asia/Shanghai", validation_alias=AliasChoices("app_timezone", "tz"))
     environment: str = "production"
     log_level: str = "INFO"

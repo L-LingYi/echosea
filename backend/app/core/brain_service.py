@@ -167,10 +167,16 @@ class CompanionPipeline:
         self.enable_background_image_caption = bool(enable_background_image_caption)
         self._session_factory = session_factory
         self._group_msg_counters: dict[int, int] = {}
+        # LRU-capped dicts: evict oldest entry when exceeding _GROUP_DICT_MAX to prevent
+        # memory leak from unlimited group registration over long uptime.
         self._group_locks: dict[int, asyncio.Lock] = {}
         self._group_generations: dict[int, int] = {}
         self._bg_caption_sem = asyncio.Semaphore(1)
         self._bg_tasks: set[asyncio.Task[Any]] = set()
+
+    # Maximum number of distinct groups tracked in-memory. Groups beyond this cap evict
+    # the oldest unlocked entry (LRU-style) to bound memory usage.
+    _GROUP_DICT_MAX: int = 2048
 
     build_prompt_messages = staticmethod(build_prompt_messages)
 
@@ -178,6 +184,14 @@ class CompanionPipeline:
         lock = self._group_locks.get(group_id)
         if lock is None:
             lock = asyncio.Lock()
+            if len(self._group_locks) >= self._GROUP_DICT_MAX:
+                # Evict oldest unlocked entry to keep memory bounded
+                for oldest_id, oldest_lock in list(self._group_locks.items()):
+                    if not oldest_lock.locked():
+                        del self._group_locks[oldest_id]
+                        self._group_generations.pop(oldest_id, None)
+                        self._group_msg_counters.pop(oldest_id, None)
+                        break
             self._group_locks[group_id] = lock
         return lock
 

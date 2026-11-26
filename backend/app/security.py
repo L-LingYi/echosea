@@ -119,13 +119,19 @@ class LoginRateLimiter:
         self._attempts: dict[str, list[float]] = defaultdict(list)
 
     def _prune(self, ip: str, now: float) -> None:
+        if ip not in self._attempts:
+            return
         cutoff = now - self.window_seconds
-        self._attempts[ip] = [t for t in self._attempts[ip] if t > cutoff]
+        remaining = [t for t in self._attempts[ip] if t > cutoff]
+        if remaining:
+            self._attempts[ip] = remaining
+        else:
+            del self._attempts[ip]  # Remove empty entries to prevent unbounded growth
 
     def is_blocked(self, ip: str) -> bool:
         now = time.monotonic()
         self._prune(ip, now)
-        return len(self._attempts[ip]) >= self.max_attempts
+        return len(self._attempts.get(ip, ())) >= self.max_attempts
 
     def record_failure(self, ip: str) -> None:
         now = time.monotonic()

@@ -75,6 +75,12 @@ class ModelHubService:
         self._cb = ProviderCircuitBreaker(alert_service=alert_service, clock=self._clock)
         self._provider_failures = self._cb.provider_failures
         self._cooldowns = self._cb.cooldowns
+        # Persistent HTTP client for connection-pool reuse across requests
+        self._http_client: httpx.AsyncClient = httpx.AsyncClient()
+
+    async def aclose(self) -> None:
+        """Close the persistent HTTP client. Called during application shutdown."""
+        await self._http_client.aclose()
 
     # ------------------------------------------------------------------
     # Smart Cooldown / Circuit-Breaker & Half-Open Auto-Recovery (delegated)
@@ -598,10 +604,14 @@ class ModelHubService:
                 headers = {"Content-Type": "application/json"}
                 if api_key:
                     headers["Authorization"] = f"Bearer {api_key}"
-                async with httpx.AsyncClient(timeout=min(10.0, float(provider.timeout_seconds))) as client:
-                    resp = await client.post(url, headers=headers, json={"model": provider.model_name, "input": clean[:1500]})
-                    resp.raise_for_status()
-                    data = resp.json()
+                resp = await self._http_client.post(
+                    url,
+                    headers=headers,
+                    json={"model": provider.model_name, "input": clean[:1500]},
+                    timeout=min(10.0, float(provider.timeout_seconds)),
+                )
+                resp.raise_for_status()
+                data = resp.json()
                 emb = ((data.get("data") or [{}])[0]).get("embedding")
                 if isinstance(emb, list) and emb:
                     return [float(x) for x in emb]
@@ -744,10 +754,9 @@ class ModelHubService:
                     payload.setdefault("response_format", {"type": "json_object"})
 
         timeout_val = min(float(provider.timeout_seconds), float(timeout_override)) if timeout_override else float(provider.timeout_seconds)
-        async with httpx.AsyncClient(timeout=timeout_val) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._http_client.post(url, headers=headers, json=payload, timeout=timeout_val)
+        resp.raise_for_status()
+        return resp.json()
 
     @staticmethod
     def _build_systemone_url(base_url: str) -> str:
@@ -758,9 +767,8 @@ class ModelHubService:
             return f"{base}/systemone"
         return f"{base}/v1/systemone"
 
-    @classmethod
     async def _call_typesafe_systemone(
-        cls,
+        self,
         provider: ModelProvider,
         api_key: str,
         state_text: str,
@@ -768,7 +776,7 @@ class ModelHubService:
         timeout_override: float | None = None,
     ) -> dict[str, Any]:
         """Native TypeSafe AI System One endpoint: POST /v1/systemone (or OpenCode /zen/v1/systemone)."""
-        url = cls._build_systemone_url(provider.base_url)
+        url = self._build_systemone_url(provider.base_url)
         extra = provider.extra_config or {}
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if isinstance(extra.get("extra_headers"), dict):
@@ -783,7 +791,6 @@ class ModelHubService:
         if isinstance(extra.get("extra_body"), dict):
             payload.update(extra["extra_body"])
         timeout_val = min(float(provider.timeout_seconds), float(timeout_override)) if timeout_override else float(provider.timeout_seconds)
-        async with httpx.AsyncClient(timeout=timeout_val) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._http_client.post(url, headers=headers, json=payload, timeout=timeout_val)
+        resp.raise_for_status()
+        return resp.json()

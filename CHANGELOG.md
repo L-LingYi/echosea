@@ -1,5 +1,16 @@
 # 更新日志（Changelog）
 
+## v1.9.1 (2026-11-26)
+- **内存泄漏防护与连接池复用**：
+  - `CompanionPipeline._get_group_lock()` 为 `_group_locks` / `_group_generations` / `_group_msg_counters` 增加 `2048` 容量上限，超出时自动淘汰最早的未加锁群组记录。
+  - `ModelHubService` 改用持久化 `httpx.AsyncClient` 复用连接池并按请求传入 `timeout`，在应用 `lifespan` 关闭时调用 `aclose()` 优雅释放连接。
+  - 修复 `LoginRateLimiter._prune()` / `is_blocked()` 在清理过期 IP 后因 `defaultdict(list)` 再次插入空列表的问题。
+- **生产安全性与查询/Schema 加固**：
+  - 在 `main.py` 的 `lifespan` 启动流程校验生产环境默认密钥：若 `MASTER_ENCRYPTION_KEY` 或 `JWT_SECRET_KEY` 仍为已知默认值则阻止启动，默认管理员密码打印告警。
+  - 显式初始化 `StateStore._event_seq = 0`，消除动态属性依赖。
+  - `MemoryService.forget_user_data()` 将时间窗口与 PostgreSQL `JSONB` 包含过滤下推到 SQL 查询中，避免对 `ambient_summaries` 全表扫描。
+  - 补全 `db/init.sql` 中 `outbox_deliveries`（`request_id`、`onebot_status`、`status VARCHAR(24)`）与 `usage_metrics`（`source`、`request_id`）缺失字段，并补充回归测试 `tests/test_hardening_fixes.py`。
+
 ## v1.9.0 (2026-11-26)
 - **群聊拟人化与短链路体验综合修复**：
   - **门卫话题打断衰减与上下文防盲**：`GatekeeperService` 新增同群第三方发言打断检测（`group_last_human`），当热聊窗口（0–60 秒）内有第三方群友发问、发图或引用别人后，自动撤销/惩罚 `0.35` 低门槛并向门卫注入 `[Third-Party Topic Interruption]` 提示；当门卫判定 `other_user` 时同步清理过期个人关注窗口，减少误插话。
