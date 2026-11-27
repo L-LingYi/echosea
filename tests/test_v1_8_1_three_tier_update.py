@@ -112,7 +112,7 @@ def test_tier2_inspect_and_totp_or_password_confirm_token(tmp_path):
         assert "updateConfirmModal" in html
         assert "updAutoEnabled" in html
         assert "openUpdateConfirmModal" in ops_js
-        assert "v1.9.4" in html
+        assert "v1.9.5" in html
 
         tok_login = client.post("/api/auth/login", json={"username": "admin", "password": "ConfirmPass2026!"}).json()["access_token"]
         headers = {"Authorization": f"Bearer {tok_login}"}

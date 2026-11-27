@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.core.multimodal_service import MultimodalService
 from app.core.profile_schema import format_acquaintance_brief
 from app.core.tts_service import detect_voice_intent
 from app.models.db import PersonaVersion
@@ -262,7 +263,13 @@ def build_prompt_messages(
         if envelope.self_qq and envelope.self_qq in envelope.mentioned_qqs:
             raw_user_text = f"@{persona.bot_name}（只艾特了你，未附加文字）"
         elif envelope.media_meta:
-            raw_user_text = "（发送了图片/表情）"
+            if image_blocks:
+                raw_user_text = "（发送了表情包/图片，请直接查看下方附图并自然回应）"
+            elif vision_hints:
+                raw_user_text = f"（发送了表情包/图片，画面内容：{'；'.join(vision_hints[:2])}）"
+            else:
+                media_tag = MultimodalService.format_media_placeholder(envelope.media_meta)
+                raw_user_text = f"（发送了{media_tag or '图片/表情'}）"
         else:
             raw_user_text = "（引用或提醒了你）"
     user_line = f"{envelope.display_name}: {raw_user_text}"

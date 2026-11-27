@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.web_perception_service import _is_public_http_url
@@ -18,6 +18,21 @@ from app.models.db import ImageVisionCache
 
 logger = logging.getLogger(__name__)
 MAX_VISION_IMAGE_BYTES = 5 * 1024 * 1024
+_GENERIC_MEDIA_SUMMARIES = {"[图片]", "[动画表情]", "[表情]", "[表情包]"}
+
+
+def is_sticker_media(item: Any) -> bool:
+    """Return True when a media_meta entry represents a QQ sticker (mface, non-zero sub_type, sticker summary, or GIF)."""
+    if not isinstance(item, dict) or item.get("type") not in ("image", "mface"):
+        return False
+    if item.get("type") == "mface":
+        return True
+    sub_type = item.get("sub_type", item.get("subType"))
+    summary = str(item.get("summary") or "")
+    fname = str(item.get("file") or "").lower()
+    if sub_type is not None and str(sub_type).strip() != "":
+        return str(sub_type).strip() != "0" or "表情" in summary or fname.endswith(".gif")
+    return "表情" in summary or fname.endswith(".gif")
 
 
 def _detect_image_mime(data: bytes) -> str:
@@ -160,13 +175,16 @@ class MultimodalService:
         image_bytes: bytes,
         source_url: str = "",
         is_gif: bool = False,
+        force_prepare: bool = False,
     ) -> dict[str, Any]:
         phash = compute_dhash(image_bytes)
         stmt = select(ImageVisionCache).where(ImageVisionCache.phash == phash)
         cached = (await session.execute(stmt)).scalar_one_or_none()
-        if cached is not None and cached.description:
+        if not force_prepare and cached is not None and cached.description:
             cached.hit_count += 1
             cached.last_used_at = datetime.now(timezone.utc)
+            if source_url:
+                cached.source_url = source_url
             await session.flush()
             return {
                 "cache_hit": True,
@@ -194,6 +212,9 @@ class MultimodalService:
             )
             session.add(cached)
             await session.flush()
+        elif source_url and cached.source_url != source_url:
+            cached.source_url = source_url
+            await session.flush()
 
         return {
             "cache_hit": False,
@@ -219,30 +240,49 @@ class MultimodalService:
         session: AsyncSession,
         media_lists: list[list[dict[str, Any]] | None],
     ) -> dict[str, str]:
-        """Batch-lookup cached vision descriptions by source_url for L1/Gatekeeper history."""
+        """Batch-lookup cached vision descriptions by source_url and phash for L1/Gatekeeper history."""
         urls: list[str] = []
+        phashes: list[str] = []
         for items in media_lists:
             for m in items or []:
-                if isinstance(m, dict) and m.get("type") in ("image", "mface") and m.get("url"):
-                    urls.append(str(m["url"]))
-        if not urls:
+                if isinstance(m, dict) and m.get("type") in ("image", "mface"):
+                    if m.get("url"):
+                        urls.append(str(m["url"]))
+                    if m.get("phash"):
+                        phashes.append(str(m["phash"]))
+        if not urls and not phashes:
             return {}
         unique_urls = list(dict.fromkeys(urls))
+        unique_phashes = list(dict.fromkeys(phashes))
+        conds = []
+        if unique_urls:
+            conds.append(ImageVisionCache.source_url.in_(unique_urls))
+        if unique_phashes:
+            conds.append(ImageVisionCache.phash.in_(unique_phashes))
         rows = (
             await session.execute(
-                select(ImageVisionCache.source_url, ImageVisionCache.description).where(
-                    ImageVisionCache.source_url.in_(unique_urls)
+                select(ImageVisionCache.source_url, ImageVisionCache.phash, ImageVisionCache.description).where(
+                    or_(*conds)
                 )
             )
         ).all()
-        return {str(u): str(d).strip() for u, d in rows if u and d and str(d).strip()}
+        result: dict[str, str] = {}
+        for u, ph, d in rows:
+            desc = str(d or "").strip()
+            if not desc:
+                continue
+            if u:
+                result[str(u)] = desc
+            if ph:
+                result[f"phash:{ph}"] = desc
+        return result
 
     @staticmethod
     def format_media_placeholder(
         media_meta: list[dict[str, Any]] | None,
         url_desc_map: dict[str, str] | None = None,
     ) -> str:
-        """Render media_meta into concise text tags like '[图片: 某手游截图]' or '[图片]'."""
+        """Render media_meta into concise text tags like '[表情包: ...]' or '[图片: ...]'."""
         if not media_meta:
             return ""
         parts: list[str] = []
@@ -252,9 +292,22 @@ class MultimodalService:
                 continue
             mtype = m.get("type")
             if mtype in ("image", "mface"):
+                ph = str(m.get("phash") or "")
                 url = str(m.get("url") or "")
-                desc = desc_map.get(url, "").strip()
-                parts.append(f"[图片: {desc[:48]}]" if desc else ("[表情包]" if mtype == "mface" else "[图片]"))
+                desc = (desc_map.get(f"phash:{ph}", "") if ph else "") or desc_map.get(url, "")
+                desc = desc.strip()
+                sticker = is_sticker_media(m)
+                if desc:
+                    label = "表情包" if sticker else "图片"
+                    parts.append(f"[{label}: {desc[:48]}]")
+                elif sticker:
+                    summary = str(m.get("summary") or "").strip()
+                    if summary and summary not in _GENERIC_MEDIA_SUMMARIES:
+                        parts.append(f"[表情包 {summary}]")
+                    else:
+                        parts.append("[表情包]")
+                else:
+                    parts.append("[图片]")
             elif mtype == "face":
                 parts.append("[QQ表情]")
         return " ".join(parts)

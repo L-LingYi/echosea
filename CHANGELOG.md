@@ -1,5 +1,10 @@
 # 更新日志（Changelog）
 
+## v1.9.5 (2026-11-27)
+- **群聊表情包当轮直看与多模态缓存全链路修复**：
+  - **修复 `soft_entry` 群表情包失明**：`_collect_vision_context()` 在 `soft_entry` 下对纯图/纯表情消息、QQ 表情包（`mface` / 非 0 `sub_type` / 摘要含「表情」/ GIF）以及关注窗口内图片（`target="bot"`）立即同步解码或命中 `dHash` 缓存，当轮直通 `main_brain`；提高 `soft_entry` 输出上限（看图 `320` / 纯文 `220`）避免思考模型截断正文，并在 `prompt_builder.py` 的纯图/纯表情用户消息中显式标注附图或缓存画面摘要。
+  - **消除重复下载、QQ 链接轮换失配与打标竞态**：`MultimodalService.lookup_or_prepare()` 命中 `dHash` 缓存时刷新最新 `source_url`，并将 `phash` 通过 `flag_modified` 回写至 `ChatMessage.media_meta`，`resolve_media_hints_map()` 支持按 `phash` 与 `source_url` 双轨命中；`soft_entry` 复用已下载字节（`_prefetched_bytes`）在回复后异步升级客观视觉摘要；`AutoStickerReactionPlugin` 放行 `sub_type=7` 等非 0 表情包并在异步打标前串行等待/补齐客观画面摘要，消除误打标竞态。
+
 ## v1.9.4 (2026-11-27)
 - **表情包发图频率节流、防重复与偷图自学习修复**：
   - **发图冷却与轮次间隔**：新增 `STICKER_COOLDOWN_SECONDS=180` 与 `STICKER_MIN_REPLY_GAP=3`（经 `StateStore` 持久化记录每会话上次发图时间与无图回复计数），同时收敛 `prompt_builder.py` 斗图配图提示词为低频克制触发；`StickerService.pick_sticker_for_tag()` 规避最近已发的 12 张表情，并在审核/导入/删图后即时失效 `top_tags` 缓存。

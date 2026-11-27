@@ -30,7 +30,7 @@ class CompanionPlugin(ABC):
 
 
 def _is_sticker_candidate(item: Any) -> bool:
-    """Filter out explicit regular photos/screenshots (sub_type=0) while accepting mface & stickers."""
+    """Filter out explicit regular photos/screenshots (sub_type=0) while accepting mface & stickers (sub_type=1/7/etc.)."""
     if not isinstance(item, dict) or item.get("type") not in ("image", "mface") or not item.get("url"):
         return False
     if item.get("type") == "mface":
@@ -39,7 +39,7 @@ def _is_sticker_candidate(item: Any) -> bool:
     if sub_type is not None and str(sub_type).strip() != "":
         summary = str(item.get("summary") or "")
         fname = str(item.get("file") or "").lower()
-        return str(sub_type).strip() == "1" or "表情" in summary or fname.endswith(".gif")
+        return str(sub_type).strip() != "0" or "表情" in summary or fname.endswith(".gif")
     return True
 
 
@@ -56,6 +56,34 @@ class AutoStickerReactionPlugin(CompanionPlugin):
 
         async def _tag_asset_async(asset_id: int, surrounding: list[str]) -> None:
             try:
+                pipeline = getattr(runtime, "pipeline", None)
+                if pipeline is not None and hasattr(pipeline, "caption_image_items"):
+                    cap_item: dict[str, Any] | None = None
+                    async with runtime.db_manager.session_factory() as check_session:
+                        from sqlalchemy import select as _sel_vis
+                        from app.models.db import ImageVisionCache as _IVC
+
+                        check_asset = await check_session.get(StickerAsset, asset_id)
+                        if check_asset is not None and check_asset.phash:
+                            vis_desc = (
+                                await check_session.execute(
+                                    _sel_vis(_IVC.description).where(_IVC.phash == check_asset.phash).limit(1)
+                                )
+                            ).scalar_one_or_none()
+                            needs_caption = (not vis_desc) or str(vis_desc).strip().startswith("图意(")
+                            if needs_caption and (check_asset.source_url or check_asset.file_path):
+                                cap_item = {
+                                    "type": "image",
+                                    "url": str(check_asset.source_url or f"local://{check_asset.phash}"),
+                                }
+                                if check_asset.file_path and Path(check_asset.file_path).is_file():
+                                    try:
+                                        cap_item["_prefetched_bytes"] = Path(check_asset.file_path).read_bytes()
+                                    except OSError:
+                                        pass
+                    if cap_item is not None:
+                        await pipeline.caption_image_items([cap_item], overwrite_fallback=True)
+
                 async with runtime.db_manager.session_factory() as tag_session:
                     asset = await tag_session.get(StickerAsset, asset_id)
                     if asset is None:

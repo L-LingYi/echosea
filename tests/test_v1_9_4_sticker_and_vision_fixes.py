@@ -177,6 +177,9 @@ def test_v194_sticker_candidate_filter_skips_regular_photos():
         {"type": "image", "url": "https://qq.com/a", "sub_type": 1, "summary": "[动画表情]", "file": "a.jpg"}
     ) is True
     assert _is_sticker_candidate(
+        {"type": "image", "url": "https://qq.com/s7", "sub_type": 7, "summary": "[/偷笑]", "file": "s7.jpg"}
+    ) is True
+    assert _is_sticker_candidate(
         {"type": "image", "url": "https://qq.com/b", "sub_type": 0, "summary": "[图片]", "file": "photo.jpg"}
     ) is False
     assert _is_sticker_candidate(
@@ -266,3 +269,150 @@ async def test_v194_disable_thinking_and_multimodal_mime_and_gif(db_session):
 
 async def _return_async(val):
     return val
+
+
+@pytest.mark.asyncio
+async def test_v195_group_sticker_soft_entry_vision_and_url_rotation(db_session):
+    """Pure sticker or sub_type=1/7 sticker on soft_entry MUST decode vision immediately and survive QQ rkey rotation."""
+    from sqlalchemy import select
+    from app.models.db import ChatMessage
+    from app.models.schemas import GatekeeperDecision
+
+    png_bytes = _make_png_bytes((180, 60, 90))
+    captured_calls: list[dict] = []
+
+    async def _fake_chat(provider, api_key, messages, temperature, max_tokens):
+        captured_calls.append({"messages": messages, "max_tokens": max_tokens})
+        # Vision caption call vs main_brain reply call
+        if messages and "图片摘要助手" in str(messages[0].get("content", "")):
+            return {"choices": [{"message": {"content": "动漫女孩祈祷表情包，配文你永远单身"}}]}
+        return {"choices": [{"message": {"content": "这祈祷姿势挺虔诚啊"}}]}
+
+    store = StateStore(force_memory=True)
+    await store.connect()
+    hub = ModelHubService("k-stk-vis", AlertService("k-stk-vis"), http_caller=_fake_chat)
+    await hub.upsert_provider(
+        db_session,
+        {
+            "slot": "main_brain",
+            "role": "primary",
+            "name": "mock-brain",
+            "base_url": "http://mock.local/v1",
+            "model_name": "deepseek-v4.1-flash",
+            "api_key": "sk-mock",
+        },
+    )
+    await db_session.commit()
+
+    mm = MultimodalService(image_fetcher=lambda _u: _return_async(png_bytes))
+    pipe = CompanionPipeline(
+        store=store,
+        identity_service=IdentityService(),
+        gatekeeper=GatekeeperService(store=store),
+        memory_service=MemoryService(),
+        model_hub=hub,
+        adapter=SnowLumaAdapter(http_url=""),
+        event_bus=PluginEventBus(),
+        multimodal_service=mm,
+    )
+
+    # 1. Pure sticker (sub_type=1) on soft_entry -> MUST pass image_block directly to main_brain
+    env_stk = MessageEnvelope(
+        message_id="stk_soft_1",
+        scene="group",
+        group_id=486135657,
+        sender_qq=1983133592,
+        sender_nickname="群友A",
+        raw_text="",
+        media_meta=[
+            {
+                "type": "image",
+                "url": "https://multimedia.nt.qq.com.cn/download?rkey=rkey_v1",
+                "sub_type": 1,
+                "summary": "[动画表情]",
+                "file": "A.jpg",
+            }
+        ],
+        self_qq=2164459727,
+    )
+    # Seed user attention so gatekeeper returns soft_entry
+    await store.record_user_attention(486135657, 1983133592, 240)
+    res1 = await pipe.process_envelope(db_session, env_stk)
+    await db_session.commit()
+    assert res1["handled"] == "soft_entry"
+    assert captured_calls, "main_brain must be invoked"
+    last_user_content = captured_calls[0]["messages"][-1]["content"]
+    assert isinstance(last_user_content, list), "soft_entry sticker must send multimodal image_url block"
+    assert last_user_content[1]["type"] == "image_url"
+    assert captured_calls[0]["max_tokens"] >= 320
+
+    # ChatMessage.media_meta should have phash backfilled
+    cm1 = (
+        await db_session.execute(select(ChatMessage).where(ChatMessage.message_id == "stk_soft_1"))
+    ).scalar_one()
+    assert cm1.media_meta and cm1.media_meta[0].get("phash")
+
+    # 2. Upgrade fallback note -> crisp objective caption using prefetched bytes
+    upgraded = await pipe.caption_image_items(
+        [{"type": "image", "url": "https://multimedia.nt.qq.com.cn/download?rkey=rkey_v1", "_prefetched_bytes": png_bytes}],
+        session=db_session,
+        overwrite_fallback=True,
+    )
+    await db_session.commit()
+    assert upgraded == 1
+
+    # 3. Same sticker re-sent later with ROTATED QQ rkey URL -> hits dHash cache, updates source_url, and injects hint into user_line
+    env_stk_rotated = MessageEnvelope(
+        message_id="stk_soft_2",
+        scene="group",
+        group_id=486135657,
+        sender_qq=1983133592,
+        sender_nickname="群友A",
+        raw_text="",
+        media_meta=[
+            {
+                "type": "image",
+                "url": "https://multimedia.nt.qq.com.cn/download?rkey=rkey_v2_rotated",
+                "sub_type": 7,
+                "summary": "[/偷笑]",
+                "file": "A.jpg",
+            }
+        ],
+        self_qq=2164459727,
+    )
+    res2 = await pipe.process_envelope(db_session, env_stk_rotated)
+    await db_session.commit()
+    assert res2["handled"] == "soft_entry"
+    user_turn_2 = captured_calls[-1]["messages"][-1]["content"]
+    assert isinstance(user_turn_2, str)
+    assert "动漫女孩祈祷表情包" in user_turn_2
+
+    # 4. Both old & rotated messages resolve in L1 media hints map (old via phash, new via updated source_url)
+    hints_map = await MultimodalService.resolve_media_hints_map(db_session, [cm1.media_meta, env_stk_rotated.media_meta])
+    assert "动漫女孩祈祷表情包" in MultimodalService.format_media_placeholder(cm1.media_meta, hints_map)
+    assert "动漫女孩祈祷表情包" in MultimodalService.format_media_placeholder(env_stk_rotated.media_meta, hints_map)
+
+    # 5. Text + sub_type=7 sticker on group_open soft_entry is ALSO decoded
+    env_sub7 = MessageEnvelope(
+        message_id="stk_sub7",
+        scene="group",
+        group_id=486135657,
+        sender_qq=1983133592,
+        raw_text="哈哈",
+        media_meta=[{"type": "image", "url": "https://qq.com/new_s7", "sub_type": 7, "summary": "[在干嘛呢]"}],
+        self_qq=2164459727,
+    )
+    grad = Image.new("RGB", (24, 24))
+    for y in range(24):
+        for x in range(24):
+            grad.putpixel((x, y), (255 - x * 10, (x % 2) * 200, 255 - y * 10))
+    buf2 = io.BytesIO()
+    grad.save(buf2, format="PNG")
+    png2 = buf2.getvalue()
+    pipe.multimodal_service = MultimodalService(image_fetcher=lambda _u: _return_async(png2))
+    blocks_s7, *_ = await pipe._collect_vision_context(
+        db_session,
+        env_sub7,
+        GatekeeperDecision(action="soft_entry", target="group_open", score=0.82, reason="warmth"),
+    )
+    assert len(blocks_s7) == 1

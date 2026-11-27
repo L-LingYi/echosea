@@ -17,13 +17,14 @@ from typing import Any
 from sqlalchemy import func as _sql_func
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.event_bus import PluginEventBus
 from app.core.gatekeeper import GatekeeperService
 from app.core.identity_service import IdentityService
 from app.core.memory_service import MemoryService
 from app.core.model_hub import ModelHubService
-from app.core.multimodal_service import MultimodalService, resolve_image_phash
+from app.core.multimodal_service import MultimodalService, compute_dhash, is_sticker_media, resolve_image_phash
 from app.core.profile_schema import format_acquaintance_brief, normalize_profile
 from app.core.prompt_builder import (
     DEFAULT_BANNED_PHRASES,
@@ -419,8 +420,9 @@ class CompanionPipeline:
         session: AsyncSession,
         envelope: MessageEnvelope,
         decision: GatekeeperDecision,
+        prefetched_out: list[dict[str, Any]] | None = None,
     ) -> tuple[list[dict[str, Any]], list[str], list[str], int]:
-        """On-demand vision: decode/cache up to 2 images on direct_pass, quoted image, high-heat sticker, or cache hit."""
+        """On-demand vision: decode/cache up to 2 images on direct_pass, stickers/pure-media/attention soft_entry, quoted image, hot sticker, or cache hit."""
         if self.multimodal_service is None:
             return [], [], [], 0
 
@@ -452,20 +454,30 @@ class CompanionPipeline:
         pending_phashes: list[str] = []
         cache_hits = 0
         fetcher = getattr(self.multimodal_service, "image_fetcher", None)
+        is_pure_media = not (envelope.raw_text or "").strip()
 
         for item, is_quoted in candidate_items:
             url = str(item["url"])
-            is_gif = url.lower().endswith(".gif")
             # Check URL match in vision cache first to avoid unnecessary downloads
             cached_by_url = (
                 await session.execute(select(ImageVisionCache).where(ImageVisionCache.source_url == url).limit(1))
             ).scalar_one_or_none()
             if cached_by_url is not None and cached_by_url.description:
+                if not is_quoted and cached_by_url.phash:
+                    item["phash"] = cached_by_url.phash
                 vision_hints.append(cached_by_url.description)
                 cache_hits += 1
                 continue
 
-            allow_decode = decision.action == "direct_pass" or (is_quoted and decision.action == "soft_entry")
+            allow_decode = decision.action == "direct_pass" or (
+                decision.action == "soft_entry"
+                and (
+                    is_quoted
+                    or is_pure_media
+                    or is_sticker_media(item)
+                    or decision.target == "bot"
+                )
+            )
             if not allow_decode and decision.action == "soft_entry":
                 hot_sticker = (
                     await session.execute(
@@ -487,17 +499,27 @@ class CompanionPipeline:
             if img_bytes is not None:
                 is_gif = url.lower().endswith(".gif") or img_bytes.startswith((b"GIF87a", b"GIF89a"))
                 res = await self.multimodal_service.lookup_or_prepare(session, img_bytes, source_url=url, is_gif=is_gif)
+                resolved_phash = str(res.get("phash") or phash)
+                if not is_quoted and resolved_phash:
+                    item["phash"] = resolved_phash
                 if res.get("cache_hit") and res.get("description"):
-                    vision_hints.append(str(res["description"]))
+                    desc_str = str(res["description"])
+                    vision_hints.append(desc_str)
                     cache_hits += 1
+                    if prefetched_out is not None and desc_str.startswith("图意("):
+                        prefetched_out.append({"type": item.get("type", "image"), "url": url, "_prefetched_bytes": img_bytes})
                 elif res.get("content_block"):
                     image_blocks.append(res["content_block"])
-                    pending_phashes.append(str(res["phash"]))
+                    pending_phashes.append(resolved_phash)
+                    if prefetched_out is not None:
+                        prefetched_out.append({"type": item.get("type", "image"), "url": url, "_prefetched_bytes": img_bytes})
             else:
                 cached_by_hash = (
                     await session.execute(select(ImageVisionCache).where(ImageVisionCache.phash == phash).limit(1))
                 ).scalar_one_or_none()
                 if cached_by_hash is not None and cached_by_hash.description:
+                    if not is_quoted:
+                        item["phash"] = phash
                     vision_hints.append(cached_by_hash.description)
                     cache_hits += 1
 
@@ -669,6 +691,7 @@ class CompanionPipeline:
 
         async def _gatekeeper_model_scorer(env: MessageEnvelope, default_target: str) -> dict[str, Any] | None:
             recent_lines: list[str] = []
+            url_desc_map: dict[str, str] = {}
             if env.scene == "group" and env.group_id is not None:
                 r_stmt = (
                     select(
@@ -687,7 +710,7 @@ class CompanionPipeline:
                 )
                 recent_rows = list(reversed((await session.execute(r_stmt)).all()))
                 url_desc_map = await MultimodalService.resolve_media_hints_map(
-                    session, [r[2] for r in recent_rows]
+                    session, [*(r[2] for r in recent_rows), env.media_meta]
                 )
                 for sender_name, raw_txt, m_meta, gk_dec in recent_rows:
                     txt_part = (raw_txt or "").strip()
@@ -699,7 +722,7 @@ class CompanionPipeline:
                     recent_lines.append(f"{prefix}: {combined}")
 
             ctx_block = "\n".join(recent_lines) if recent_lines else "(none)"
-            latest_media = MultimodalService.format_media_placeholder(env.media_meta)
+            latest_media = MultimodalService.format_media_placeholder(env.media_meta, url_desc_map)
             latest_msg_display = " ".join(p for p in ((env.raw_text or "").strip(), latest_media) if p)
             state_text = (
                 f"Bot name: {persona.bot_name} (aliases: {', '.join(persona.aliases or [])})\n"
@@ -801,8 +824,9 @@ class CompanionPipeline:
             )
 
         # 4. Dual-Path Persistence: ALWAYS record message (Ambient Memory never drops silent group chat!)
+        recorded_msg: ChatMessage | None = None
         if decision.action != "blocked_recall":
-            await self.memory_service.record_message(session, envelope, decision)
+            recorded_msg = await self.memory_service.record_message(session, envelope, decision)
             if envelope.scene == "group" and envelope.group_id:
                 count = self._group_msg_counters.get(envelope.group_id, 0) + 1
                 self._group_msg_counters[envelope.group_id] = count
@@ -812,7 +836,7 @@ class CompanionPipeline:
 
             if (
                 envelope.scene == "group"
-                and decision.action in ("silent", "soft_entry")
+                and decision.action == "silent"
                 and not budget_fuse
                 and self.enable_background_image_caption
                 and self.multimodal_service is not None
@@ -883,9 +907,33 @@ class CompanionPipeline:
             return {"handled": "voice_fallback_text", "request_id": request_id, "decision": decision.model_dump(), "tts": tts_res}
 
         # 7. Assemble 5-Layer Memory (Hybrid L3 Recall) + On-demand Multimodal Vision + Slow Daily Briefing + 48h Self-Correction Hints
+        prefetched_vision_items: list[dict[str, Any]] = []
         image_blocks, vision_hints, pending_vision_phashes, vision_cache_hits = await self._collect_vision_context(
-            session, envelope, decision
+            session, envelope, decision, prefetched_out=prefetched_vision_items
         )
+        if recorded_msg is not None and envelope.media_meta and any(
+            isinstance(m, dict) and m.get("phash") for m in envelope.media_meta
+        ):
+            recorded_msg.media_meta = [dict(m) if isinstance(m, dict) else m for m in envelope.media_meta]
+            flag_modified(recorded_msg, "media_meta")
+            await session.flush()
+        if (
+            envelope.scene == "group"
+            and decision.action == "soft_entry"
+            and not budget_fuse
+            and self.enable_background_image_caption
+            and self.multimodal_service is not None
+            and self._session_factory is not None
+        ):
+            unhandled_imgs = [
+                m for m in (envelope.media_meta or [])
+                if isinstance(m, dict)
+                and m.get("type") in ("image", "mface")
+                and m.get("url")
+                and not m.get("phash")
+            ][:2]
+            if unhandled_imgs:
+                self._schedule_background_image_caption(unhandled_imgs)
         recall_query = (
             (envelope.raw_text or "").strip()
             or (envelope.quoted_text or "").strip()
@@ -1021,7 +1069,7 @@ class CompanionPipeline:
                 slot="main_brain",
                 messages=messages,
                 temperature=0.75,
-                max_tokens=600 if decision.action == "direct_pass" else 160,
+                max_tokens=600 if decision.action == "direct_pass" else (320 if image_blocks else 220),
                 source="production",
                 request_id=request_id,
                 session_scope=session_scope,
@@ -1135,6 +1183,14 @@ class CompanionPipeline:
             summary_note = f"图意({(envelope.raw_text or '').strip()[:30] or '无配文'}) -> 回复参考: {cleaned[:80]}"
             for ph in pending_vision_phashes:
                 await self.multimodal_service.save_vision_description(session, ph, summary_note)
+        if (
+            prefetched_vision_items
+            and not budget_fuse
+            and self.enable_background_image_caption
+            and self.multimodal_service is not None
+            and self._session_factory is not None
+        ):
+            self._schedule_background_image_caption(prefetched_vision_items, overwrite_fallback=True)
 
         # 10. Voice synthesis if requested ('answer_voice')
         if voice_intent == "answer_voice" and self.tts_service is not None:
@@ -1422,10 +1478,17 @@ class CompanionPipeline:
             )
         await session.flush()
 
-    def _schedule_background_image_caption(self, img_items: list[dict[str, Any]]) -> None:
+    def _schedule_background_image_caption(
+        self,
+        img_items: list[dict[str, Any]],
+        overwrite_fallback: bool = False,
+    ) -> None:
         if self._session_factory is None or self.multimodal_service is None:
             return
-        task = asyncio.create_task(self.caption_image_items(img_items), name="bg_image_caption")
+        task = asyncio.create_task(
+            self.caption_image_items(img_items, overwrite_fallback=overwrite_fallback),
+            name="bg_image_caption",
+        )
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
@@ -1433,6 +1496,7 @@ class CompanionPipeline:
         self,
         img_items: list[dict[str, Any]],
         session: AsyncSession | None = None,
+        overwrite_fallback: bool = False,
     ) -> int:
         """Download and generate concise 15-30 char captions into ImageVisionCache (dHash deduped)."""
         if self.multimodal_service is None:
@@ -1445,22 +1509,43 @@ class CompanionPipeline:
             captioned = 0
             for item in img_items[:2]:
                 url = str(item.get("url") or "").strip()
-                if not url:
+                prefetched = item.get("_prefetched_bytes")
+                if not url and not isinstance(prefetched, (bytes, bytearray)):
                     continue
-                existing = (
-                    await s.execute(select(ImageVisionCache).where(ImageVisionCache.source_url == url).limit(1))
-                ).scalar_one_or_none()
-                if existing is not None and existing.description:
-                    continue
-                _, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
+                if url:
+                    existing = (
+                        await s.execute(select(ImageVisionCache).where(ImageVisionCache.source_url == url).limit(1))
+                    ).scalar_one_or_none()
+                    if existing is not None and existing.description:
+                        if not overwrite_fallback or not existing.description.startswith("图意("):
+                            continue
+                if isinstance(prefetched, (bytes, bytearray)) and prefetched:
+                    img_bytes: bytes | None = bytes(prefetched)
+                    try:
+                        ph_check = compute_dhash(img_bytes)
+                    except Exception:
+                        ph_check = ""
+                else:
+                    ph_check, img_bytes = await resolve_image_phash(url, timeout=3.0, fetcher=fetcher)
                 if img_bytes is None:
                     continue
+                if ph_check:
+                    existing_ph = (
+                        await s.execute(select(ImageVisionCache).where(ImageVisionCache.phash == ph_check).limit(1))
+                    ).scalar_one_or_none()
+                    if existing_ph is not None and existing_ph.description:
+                        if url and existing_ph.source_url != url:
+                            existing_ph.source_url = url
+                            await s.flush()
+                        if not overwrite_fallback or not existing_ph.description.startswith("图意("):
+                            continue
                 is_gif = url.lower().endswith(".gif") or img_bytes.startswith((b"GIF87a", b"GIF89a"))
                 prep = await self.multimodal_service.lookup_or_prepare(
-                    s, img_bytes, source_url=url, is_gif=is_gif
+                    s, img_bytes, source_url=url, is_gif=is_gif, force_prepare=overwrite_fallback
                 )
                 if prep.get("cache_hit") and prep.get("description"):
-                    continue
+                    if not overwrite_fallback or not str(prep["description"]).startswith("图意("):
+                        continue
                 block = prep.get("content_block")
                 if not block:
                     continue
